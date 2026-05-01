@@ -1,5 +1,6 @@
 import {
   cloneMap,
+  getTile,
   isPassable,
   unitAt,
   type GameMap,
@@ -57,6 +58,9 @@ export function startRuntime(
     highlights: [],
     enemyPreviews: [],
     floatingTexts,
+    coverIndicators: [],
+    threatMarkers: [],
+    sightLines: [],
   };
 
   resizeCanvasForMap(canvas, map);
@@ -87,6 +91,65 @@ export function startRuntime(
   hud.appendChild(turnLabel);
   hud.appendChild(apLabel);
   hud.appendChild(row);
+
+  const computeOverlays = () => {
+    state.coverIndicators = [];
+    state.threatMarkers = [];
+    state.sightLines = [];
+    if (turn !== "player") return;
+
+    for (const e of map.units) {
+      if (e.team !== "enemy" || e.hp <= 0) continue;
+      let seesAny = false;
+      for (const p of map.units) {
+        if (p.team !== "player" || p.hp <= 0) continue;
+        if (hasLineOfSight(map, e.x, e.y, p.x, p.y)) {
+          seesAny = true;
+          break;
+        }
+      }
+      if (seesAny) state.threatMarkers!.push({ x: e.x, y: e.y });
+    }
+
+    if (!selected || selected.hp <= 0) return;
+
+    const adjs: { side: "n" | "s" | "e" | "w"; x: number; y: number }[] = [
+      { side: "n", x: selected.x, y: selected.y - 1 },
+      { side: "s", x: selected.x, y: selected.y + 1 },
+      { side: "w", x: selected.x - 1, y: selected.y },
+      { side: "e", x: selected.x + 1, y: selected.y },
+    ];
+    for (const a of adjs) {
+      const t = getTile(map, a.x, a.y);
+      if (t === "wall") {
+        state.coverIndicators!.push({
+          x: selected.x,
+          y: selected.y,
+          side: a.side,
+          kind: "wall",
+        });
+      } else if (t === "half_cover") {
+        state.coverIndicators!.push({
+          x: selected.x,
+          y: selected.y,
+          side: a.side,
+          kind: "half_cover",
+        });
+      }
+    }
+
+    for (const e of map.units) {
+      if (e.team !== "enemy" || e.hp <= 0) continue;
+      if (hasLineOfSight(map, selected.x, selected.y, e.x, e.y)) {
+        state.sightLines!.push({
+          fromX: selected.x,
+          fromY: selected.y,
+          toX: e.x,
+          toY: e.y,
+        });
+      }
+    }
+  };
 
   const computeHighlights = () => {
     state.highlights = [];
@@ -140,6 +203,13 @@ export function startRuntime(
       apLabel.textContent = "No unit selected. Tap one of your units.";
     }
     endTurnBtn.disabled = turn !== "player" || outcome !== null || busy;
+    const livePlayers = map.units.filter((u) => u.team === "player" && u.hp > 0);
+    const allSpent =
+      livePlayers.length > 0 && livePlayers.every((u) => u.ap === 0);
+    const showSpentNudge =
+      turn === "player" && outcome === null && !busy && allSpent;
+    endTurnBtn.textContent = showSpentNudge ? "End Turn (all spent)" : "End Turn";
+    endTurnBtn.classList.toggle("pulse-attention", showSpentNudge);
     const canOverwatch =
       turn === "player" &&
       outcome === null &&
@@ -155,6 +225,7 @@ export function startRuntime(
   const redraw = () => {
     state.selected = selected;
     computeHighlights();
+    computeOverlays();
     state.floatingTexts = floatingTexts.filter((t) => t.expiresAt > performance.now());
     draw(canvas, state);
     updateHud();
@@ -162,17 +233,18 @@ export function startRuntime(
 
   let bannerFadeTimer = 0;
   let bannerHideTimer = 0;
-  const showTurnBanner = (text: string) => {
+  const showTurnBanner = (kind: "player" | "enemy") => {
     clearTimeout(bannerFadeTimer);
     clearTimeout(bannerHideTimer);
-    banner.textContent = text;
-    banner.classList.remove("hidden", "fade");
+    banner.textContent = kind === "player" ? "YOUR TURN" : "ENEMY TURN";
+    banner.classList.remove("hidden", "fade", "your-turn", "enemy-turn");
+    banner.classList.add(kind === "player" ? "your-turn" : "enemy-turn");
     bannerFadeTimer = window.setTimeout(() => {
       banner.classList.add("fade");
-    }, 600);
+    }, 700);
     bannerHideTimer = window.setTimeout(() => {
       banner.classList.add("hidden");
-    }, 1100);
+    }, 1300);
   };
 
   const addFloating = (text: string, x: number, y: number, color: string) => {
@@ -316,7 +388,7 @@ export function startRuntime(
           u.overwatch = false;
         }
       }
-      showTurnBanner("PLAYER TURN");
+      showTurnBanner("player");
     }
     busy = false;
     redraw();
@@ -338,7 +410,7 @@ export function startRuntime(
       if (u.team === "enemy" && u.hp > 0) u.ap = u.maxAp;
     }
     selected = null;
-    showTurnBanner("ENEMY TURN");
+    showTurnBanner("enemy");
     redraw();
     void animateEnemyTurn();
   });
@@ -350,20 +422,29 @@ export function startRuntime(
 
   let rafId = 0;
   const tick = () => {
+    let needRedraw = false;
     if (floatingTexts.length > 0) {
       const now = performance.now();
       for (let i = floatingTexts.length - 1; i >= 0; i--) {
         if (floatingTexts[i].expiresAt <= now) floatingTexts.splice(i, 1);
       }
-      redraw();
+      needRedraw = true;
     }
+    if (
+      turn === "player" &&
+      outcome === null &&
+      (state.threatMarkers?.length ?? 0) > 0
+    ) {
+      needRedraw = true;
+    }
+    if (needRedraw) redraw();
     rafId = requestAnimationFrame(tick);
   };
   rafId = requestAnimationFrame(tick);
 
   const initialPlayer = map.units.find((u) => u.team === "player" && u.hp > 0) ?? null;
   selected = initialPlayer;
-  showTurnBanner("PLAYER TURN");
+  showTurnBanner("player");
   redraw();
 
   return {
@@ -373,7 +454,7 @@ export function startRuntime(
       clearTimeout(bannerFadeTimer);
       clearTimeout(bannerHideTimer);
       banner.classList.add("hidden");
-      banner.classList.remove("fade");
+      banner.classList.remove("fade", "your-turn", "enemy-turn");
       hud.innerHTML = "";
       overlay.classList.add("hidden");
       overlayButton.onclick = null;

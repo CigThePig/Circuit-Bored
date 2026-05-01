@@ -15,12 +15,34 @@ export type EnemyPreview = {
   hasCover: boolean;
 };
 
+export type CoverIndicator = {
+  x: number;
+  y: number;
+  side: "n" | "s" | "e" | "w";
+  kind: "wall" | "half_cover";
+};
+
+export type ThreatMarker = {
+  x: number;
+  y: number;
+};
+
+export type SightLine = {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+};
+
 export type RenderState = {
   map: GameMap;
   selected: Unit | null;
   highlights: { x: number; y: number; fill: string; border: string }[];
   enemyPreviews: EnemyPreview[];
   floatingTexts: FloatingText[];
+  coverIndicators?: CoverIndicator[];
+  threatMarkers?: ThreatMarker[];
+  sightLines?: SightLine[];
 };
 
 export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
@@ -42,6 +64,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   const map = state.map;
   const cssW = parseFloat(canvas.style.width || `${canvas.width}`);
   const cell = cssW / map.width;
+  const now = performance.now();
 
   ctx.clearRect(0, 0, cssW, cssW);
 
@@ -81,19 +104,63 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
     ctx.strokeRect(h.x * cell + 1, h.y * cell + 1, cell - 2, cell - 2);
   }
 
+  if (state.sightLines && state.sightLines.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 216, 58, 0.4)";
+    ctx.lineWidth = Math.max(1, Math.floor(cell * 0.06));
+    ctx.lineCap = "round";
+    for (const line of state.sightLines) {
+      ctx.beginPath();
+      ctx.moveTo(line.fromX * cell + cell / 2, line.fromY * cell + cell / 2);
+      ctx.lineTo(line.toX * cell + cell / 2, line.toY * cell + cell / 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   for (const u of map.units) {
     if (u.hp <= 0) continue;
     const px = u.x * cell;
     const py = u.y * cell;
     const pad = Math.max(2, Math.floor(cell * 0.12));
-    ctx.fillStyle = u.team === "player" ? "#3a7bd5" : "#d54a4a";
+    const cx = px + cell / 2;
+    const cy = py + cell / 2;
+    const fresh = u.ap === u.maxAp;
+    const spent = u.ap === 0;
+
+    let bodyColor: string;
+    if (u.team === "player") {
+      bodyColor = spent ? "#1f4a85" : "#3a7bd5";
+    } else {
+      bodyColor = spent ? "#7a2828" : "#d54a4a";
+    }
+    ctx.fillStyle = bodyColor;
     ctx.fillRect(px + pad, py + pad, cell - pad * 2, cell - pad * 2);
+
+    if (spent) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.fillRect(px + pad, py + pad, cell - pad * 2, cell - pad * 2);
+      const dotR = Math.max(2, Math.floor(cell * 0.07));
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(px + pad + dotR + 2, py + pad + dotR + 2, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (fresh) {
+      const ringColor = u.team === "player" ? "#5ad6ff" : "#ff8a3a";
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = Math.max(2, Math.floor(cell * 0.06));
+      ctx.beginPath();
+      ctx.arc(cx, cy, cell * 0.46, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     if (u.overwatch) {
       ctx.strokeStyle = "#ffe066";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(px + cell / 2, py + cell / 2, cell * 0.42, 0, Math.PI * 2);
+      ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -106,8 +173,102 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
     ctx.fillStyle = "#fff";
     ctx.font = `${Math.floor(cell * 0.32)}px -apple-system, system-ui, sans-serif`;
     ctx.textAlign = "right";
-    ctx.textBaseline = "bottom";
-    ctx.fillText(`${u.hp}`, px + cell - 4, py + cell - 2);
+    ctx.textBaseline = "top";
+    ctx.fillText(`${u.hp}`, px + cell - 4, py + 2);
+
+    const pipCount = u.maxAp;
+    if (pipCount > 0) {
+      const pipR = Math.max(1.5, cell * 0.05);
+      const gap = Math.max(1, pipR * 1.1);
+      const totalW = pipCount * pipR * 2 + (pipCount - 1) * gap;
+      const startX = cx - totalW / 2 + pipR;
+      const pipY = py + cell - pipR - 2;
+      for (let i = 0; i < pipCount; i++) {
+        const pcx = startX + i * (pipR * 2 + gap);
+        ctx.beginPath();
+        ctx.arc(pcx, pipY, pipR, 0, Math.PI * 2);
+        if (i < u.ap) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+        } else {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  if (state.coverIndicators && state.coverIndicators.length > 0) {
+    for (const ind of state.coverIndicators) {
+      const px = ind.x * cell;
+      const py = ind.y * cell;
+      const isWall = ind.kind === "wall";
+      const color = isWall ? "#9bdcff" : "#f5c542";
+      const thickness = isWall
+        ? Math.max(3, Math.floor(cell * 0.1))
+        : Math.max(2, Math.floor(cell * 0.05));
+      const cornerInset = Math.max(2, Math.floor(cell * 0.18));
+      const edgeOffset = Math.max(1, Math.floor(cell * 0.04));
+      ctx.fillStyle = color;
+      if (ind.side === "n") {
+        ctx.fillRect(
+          px + cornerInset,
+          py + edgeOffset,
+          cell - cornerInset * 2,
+          thickness,
+        );
+      } else if (ind.side === "s") {
+        ctx.fillRect(
+          px + cornerInset,
+          py + cell - edgeOffset - thickness,
+          cell - cornerInset * 2,
+          thickness,
+        );
+      } else if (ind.side === "w") {
+        ctx.fillRect(
+          px + edgeOffset,
+          py + cornerInset,
+          thickness,
+          cell - cornerInset * 2,
+        );
+      } else if (ind.side === "e") {
+        ctx.fillRect(
+          px + cell - edgeOffset - thickness,
+          py + cornerInset,
+          thickness,
+          cell - cornerInset * 2,
+        );
+      }
+    }
+  }
+
+  if (state.threatMarkers && state.threatMarkers.length > 0) {
+    const pulse = 0.6 + 0.4 * (Math.sin((now / 1200) * Math.PI * 2) * 0.5 + 0.5);
+    for (const m of state.threatMarkers) {
+      const px = m.x * cell;
+      const py = m.y * cell;
+      const ecx = px + cell / 2;
+      const ecyDesired = py - cell * 0.05;
+      const ecy = Math.max(ecyDesired, cell * 0.12);
+      const rx = cell * 0.18;
+      const ry = cell * 0.1;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.beginPath();
+      ctx.ellipse(ecx, ecy, rx + 1, ry + 1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ff4040";
+      ctx.beginPath();
+      ctx.ellipse(ecx, ecy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(ecx, ecy, Math.max(1, cell * 0.05), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   for (const p of state.enemyPreviews) {
@@ -141,17 +302,16 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
     }
   }
 
-  const now = performance.now();
   for (const t of state.floatingTexts) {
     if (t.expiresAt < now) continue;
-    const cx = t.x * cell + cell / 2;
-    const cy = t.y * cell + cell / 2;
+    const tcx = t.x * cell + cell / 2;
+    const tcy = t.y * cell + cell / 2;
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.font = `bold ${Math.floor(cell * 0.32)}px -apple-system, system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(t.text, cx + 1, cy + 1);
+    ctx.fillText(t.text, tcx + 1, tcy + 1);
     ctx.fillStyle = t.color;
-    ctx.fillText(t.text, cx, cy);
+    ctx.fillText(t.text, tcx, tcy);
   }
 }
