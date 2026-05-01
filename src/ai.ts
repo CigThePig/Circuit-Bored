@@ -68,7 +68,8 @@ function aStarNextStep(
 
   const passable = (x: number, y: number): boolean => {
     if (!inBounds(map, x, y)) return false;
-    if (getTile(map, x, y) === "wall") return false;
+    const t = getTile(map, x, y);
+    if (t === "wall" || t === "half_cover") return false;
     if (x === tx && y === ty) return true;
     if (unitAt(map, x, y)) return false;
     return true;

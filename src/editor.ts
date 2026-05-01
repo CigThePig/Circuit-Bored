@@ -11,7 +11,7 @@ import {
 import { attachTapHandler } from "./input.ts";
 import { draw, resizeCanvasForMap, type RenderState } from "./render.ts";
 
-type Tool = "floor" | "wall" | "player" | "enemy";
+type Tool = "floor" | "wall" | "half_cover" | "player" | "enemy";
 
 export type EditorHandle = {
   getMap: () => GameMap;
@@ -50,8 +50,13 @@ export function startEditor(
       const u = unitAt(map, x, y);
       if (u) return;
       setTile(map, x, y, "wall");
+    } else if (tool === "half_cover") {
+      const u = unitAt(map, x, y);
+      if (u) return;
+      setTile(map, x, y, "half_cover");
     } else if (tool === "player") {
-      if (map.tiles[y * map.width + x] === "wall") return;
+      const t = map.tiles[y * map.width + x];
+      if (t === "wall" || t === "half_cover") return;
       const existing = unitAt(map, x, y);
       if (existing && existing.team === "player") {
         map.units = map.units.filter((u) => u !== existing);
@@ -59,7 +64,8 @@ export function startEditor(
         map.units.push(makeUnit("player", x, y));
       }
     } else if (tool === "enemy") {
-      if (map.tiles[y * map.width + x] === "wall") return;
+      const t = map.tiles[y * map.width + x];
+      if (t === "wall" || t === "half_cover") return;
       const existing = unitAt(map, x, y);
       if (existing && existing.team === "enemy") {
         map.units = map.units.filter((u) => u !== existing);
@@ -76,6 +82,7 @@ export function startEditor(
   const tools: { key: Tool; label: string }[] = [
     { key: "floor", label: "Floor" },
     { key: "wall", label: "Wall" },
+    { key: "half_cover", label: "Half" },
     { key: "player", label: "Player" },
     { key: "enemy", label: "Enemy" },
   ];

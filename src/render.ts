@@ -48,12 +48,25 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
       const t = map.tiles[y * map.width + x];
-      if (t === "floor") {
-        ctx.fillStyle = "#bbbbbb";
-      } else {
+      if (t === "wall") {
         ctx.fillStyle = "#3a3a3a";
+      } else {
+        ctx.fillStyle = "#bbbbbb";
       }
       ctx.fillRect(x * cell, y * cell, cell, cell);
+      if (t === "half_cover") {
+        const inset = Math.max(2, Math.floor(cell * 0.18));
+        ctx.fillStyle = "#8a6f4a";
+        ctx.fillRect(x * cell + inset, y * cell + inset, cell - inset * 2, cell - inset * 2);
+        ctx.strokeStyle = "#5a4628";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(
+          x * cell + inset + 0.5,
+          y * cell + inset + 0.5,
+          cell - inset * 2 - 1,
+          cell - inset * 2 - 1,
+        );
+      }
       ctx.strokeStyle = t === "wall" ? "#222" : "#999";
       ctx.lineWidth = 1;
       ctx.strokeRect(x * cell + 0.5, y * cell + 0.5, cell - 1, cell - 1);
