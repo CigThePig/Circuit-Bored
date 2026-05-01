@@ -19,7 +19,7 @@ import {
   resolveShot,
   targetHasCover,
 } from "./combat.ts";
-import { takeEnemyAction } from "./ai.ts";
+import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 
 type Turn = "player" | "enemy";
 type Outcome = "victory" | "defeat" | null;
@@ -285,6 +285,7 @@ export function startRuntime(
     await delay(500);
     const enemies = map.units.filter((u) => u.team === "enemy" && u.hp > 0);
     for (const enemy of enemies) {
+      beginEnemyTurn(map, enemy);
       while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
         const canShoot = canShootThisTurn.get(enemy.id) ?? false;
         const action = takeEnemyAction(map, enemy, canShoot);
