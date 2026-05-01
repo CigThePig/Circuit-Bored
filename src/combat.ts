@@ -1,8 +1,8 @@
 import type { GameMap, Unit } from "./map.ts";
 import { getTile, inBounds } from "./map.ts";
 
-export const BASE_HIT = 0.8;
-export const COVER_PENALTY = 0.5;
+export const BASE_HIT = 0.85;
+export const COVER_PENALTY = 0.35;
 export const SHOT_DAMAGE = 3;
 
 export function bresenhamLine(

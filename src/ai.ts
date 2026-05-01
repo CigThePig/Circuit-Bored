@@ -42,8 +42,12 @@ export function takeEnemyAction(
   const target = closestPlayer(map, enemy);
   if (!target) return { kind: "wait" };
 
-  if (canShoot && hasLineOfSight(map, enemy.x, enemy.y, target.x, target.y)) {
-    enemy.ap -= 1;
+  if (
+    canShoot &&
+    enemy.ap >= 2 &&
+    hasLineOfSight(map, enemy.x, enemy.y, target.x, target.y)
+  ) {
+    enemy.ap -= 2;
     const result = resolveShot(map, enemy, target);
     return { kind: "shoot", target, result };
   }

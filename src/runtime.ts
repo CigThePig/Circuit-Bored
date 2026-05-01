@@ -93,52 +93,52 @@ export function startRuntime(
     state.highlights = [];
     state.enemyPreviews = [];
     if (!selected || turn !== "player") return;
-    if (selected.ap <= 0) return;
-    const adj = [
-      { x: selected.x + 1, y: selected.y },
-      { x: selected.x - 1, y: selected.y },
-      { x: selected.x, y: selected.y + 1 },
-      { x: selected.x, y: selected.y - 1 },
-    ];
-    for (const c of adj) {
-      if (isPassable(map, c.x, c.y)) {
-        state.highlights.push({
-          x: c.x,
-          y: c.y,
-          fill: "rgba(80, 200, 120, 0.55)",
-          border: "rgba(80, 200, 120, 1)",
-        });
+    if (selected.ap >= 1) {
+      const adj = [
+        { x: selected.x + 1, y: selected.y },
+        { x: selected.x - 1, y: selected.y },
+        { x: selected.x, y: selected.y + 1 },
+        { x: selected.x, y: selected.y - 1 },
+      ];
+      for (const c of adj) {
+        if (isPassable(map, c.x, c.y)) {
+          state.highlights.push({
+            x: c.x,
+            y: c.y,
+            fill: "rgba(80, 200, 120, 0.55)",
+            border: "rgba(80, 200, 120, 1)",
+          });
+        }
       }
     }
-    for (const u of map.units) {
-      if (u.team !== "enemy" || u.hp <= 0) continue;
-      if (!hasLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
-      state.highlights.push({
-        x: u.x,
-        y: u.y,
-        fill: "rgba(255, 80, 80, 0.55)",
-        border: "rgba(255, 80, 80, 1)",
-      });
-      const hasCover = targetHasCover(map, selected, u);
-      const hitChance = Math.max(0, BASE_HIT - (hasCover ? COVER_PENALTY : 0));
-      state.enemyPreviews.push({
-        x: u.x,
-        y: u.y,
-        hitPct: Math.round(hitChance * 100),
-        hasCover,
-      });
+    if (selected.ap >= 2) {
+      for (const u of map.units) {
+        if (u.team !== "enemy" || u.hp <= 0) continue;
+        if (!hasLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
+        state.highlights.push({
+          x: u.x,
+          y: u.y,
+          fill: "rgba(255, 80, 80, 0.55)",
+          border: "rgba(255, 80, 80, 1)",
+        });
+        const hasCover = targetHasCover(map, selected, u);
+        const hitChance = Math.max(0, BASE_HIT - (hasCover ? COVER_PENALTY : 0));
+        state.enemyPreviews.push({
+          x: u.x,
+          y: u.y,
+          hitPct: Math.round(hitChance * 100),
+          hasCover,
+        });
+      }
     }
   };
 
   const updateHud = () => {
-    const playerUnit = map.units.find((u) => u.team === "player" && u.hp > 0) ?? null;
     turnLabel.textContent = turn === "player" ? "Your turn" : "Enemy turn";
     if (selected && selected.hp > 0) {
       apLabel.textContent = `Selected: HP ${selected.hp}/${selected.maxHp}  AP ${selected.ap}/${selected.maxAp}`;
-    } else if (playerUnit) {
-      apLabel.textContent = `Player: HP ${playerUnit.hp}/${playerUnit.maxHp}  AP ${playerUnit.ap}/${playerUnit.maxAp}`;
     } else {
-      apLabel.textContent = "";
+      apLabel.textContent = "No unit selected. Tap one of your units.";
     }
     endTurnBtn.disabled = turn !== "player" || outcome !== null || busy;
     const canOverwatch =
@@ -213,17 +213,18 @@ export function startRuntime(
     }
 
     if (tappedUnit && tappedUnit.team === "enemy") {
-      if (selected.ap <= 0) return;
+      if (selected.ap < 2) return;
       if (!hasLineOfSight(map, selected.x, selected.y, tappedUnit.x, tappedUnit.y)) {
         return;
       }
-      selected.ap -= 1;
+      selected.ap -= 2;
       const result = resolveShot(map, selected, tappedUnit);
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, tappedUnit.x, tappedUnit.y, "#ffd83a");
       } else {
         addFloating("MISS", tappedUnit.x, tappedUnit.y, "#fff");
       }
+      if (selected.ap <= 0) selected = null;
       redraw();
       checkOutcome();
       redraw();
@@ -236,6 +237,7 @@ export function startRuntime(
       selected.x = x;
       selected.y = y;
       selected.ap -= 1;
+      if (selected.ap <= 0) selected = null;
       redraw();
     }
   });
@@ -268,7 +270,7 @@ export function startRuntime(
       redraw();
       checkOutcome();
       await delay(350);
-      if (enemy.hp <= 0 || outcome !== null) break;
+      break;
     }
   };
 
