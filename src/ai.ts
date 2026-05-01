@@ -1,6 +1,6 @@
 import type { GameMap, Unit } from "./map.ts";
 import { getTile, inBounds, isPassable, unitAt } from "./map.ts";
-import { hasLineOfSight, resolveShot, type ShotResult } from "./combat.ts";
+import { hasShotLineOfSight, resolveShot, type ShotResult } from "./combat.ts";
 
 export type AiAction =
   | { kind: "shoot"; target: Unit; result: ShotResult }
@@ -39,7 +39,7 @@ function closestVisiblePlayer(map: GameMap, enemy: Unit): Unit | null {
   let bestDist = Infinity;
   for (const u of map.units) {
     if (u.team !== "player" || u.hp <= 0) continue;
-    if (!hasLineOfSight(map, enemy.x, enemy.y, u.x, u.y)) continue;
+    if (!hasShotLineOfSight(map, enemy.x, enemy.y, u.x, u.y)) continue;
     const d = manhattan(enemy.x, enemy.y, u.x, u.y);
     if (d < bestDist) {
       bestDist = d;
@@ -156,7 +156,7 @@ export function takeEnemyAction(
   if (!target) return { kind: "wait" };
 
   if (canShoot && enemy.ap >= 2) {
-    if (hasLineOfSight(map, enemy.x, enemy.y, target.x, target.y)) {
+    if (hasShotLineOfSight(map, enemy.x, enemy.y, target.x, target.y)) {
       enemy.ap -= 2;
       const result = resolveShot(map, enemy, target);
       return { kind: "shoot", target, result };

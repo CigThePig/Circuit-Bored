@@ -53,6 +53,58 @@ export function hasLineOfSight(
   return true;
 }
 
+export function getPeekPositions(
+  map: GameMap,
+  x: number,
+  y: number,
+): { x: number; y: number }[] {
+  const peeks: { x: number; y: number }[] = [];
+  const dirs = [
+    { dx: 1, dy: 0 },
+    { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 0, dy: -1 },
+  ];
+  for (const d of dirs) {
+    const wx = x + d.dx;
+    const wy = y + d.dy;
+    if (getTile(map, wx, wy) !== "wall") continue;
+    const perps = d.dx !== 0
+      ? [{ px: 0, py: 1 }, { px: 0, py: -1 }]
+      : [{ px: 1, py: 0 }, { px: -1, py: 0 }];
+    for (const p of perps) {
+      const lx = x + p.px;
+      const ly = y + p.py;
+      const cx = wx + p.px;
+      const cy = wy + p.py;
+      if (!inBounds(map, lx, ly) || !inBounds(map, cx, cy)) continue;
+      if (getTile(map, lx, ly) === "wall") continue;
+      if (getTile(map, cx, cy) === "wall") continue;
+      peeks.push({ x: cx, y: cy });
+    }
+  }
+  return peeks;
+}
+
+export function hasShotLineOfSight(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+): boolean {
+  if (hasLineOfSight(map, sx, sy, tx, ty)) return true;
+  const sources = [{ x: sx, y: sy }, ...getPeekPositions(map, sx, sy)];
+  const targets = [{ x: tx, y: ty }, ...getPeekPositions(map, tx, ty)];
+  for (const s of sources) {
+    for (const t of targets) {
+      if (s.x === sx && s.y === sy && t.x === tx && t.y === ty) continue;
+      if (hasLineOfSight(map, s.x, s.y, t.x, t.y)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Returns the hit-chance penalty from cover the target gets vs this shooter.
  * Picks the dominant-axis adjacent tile on the side facing the shooter; walls
