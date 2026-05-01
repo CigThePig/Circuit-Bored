@@ -265,7 +265,8 @@ export function startRuntime(
     else if (!playerAlive) outcome = "defeat";
     if (outcome) {
       overlayText.textContent = outcome === "victory" ? "VICTORY" : "DEFEAT";
-      overlay.classList.remove("hidden");
+      overlay.classList.remove("hidden", "victory", "defeat");
+      overlay.classList.add(outcome === "victory" ? "victory" : "defeat");
     }
   };
 
@@ -458,6 +459,7 @@ export function startRuntime(
       banner.classList.remove("fade", "your-turn", "enemy-turn");
       hud.innerHTML = "";
       overlay.classList.add("hidden");
+      overlay.classList.remove("victory", "defeat");
       overlayButton.onclick = null;
     },
   };

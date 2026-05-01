@@ -8,17 +8,35 @@
     <style>
       :root {
         color-scheme: dark;
+        --bg-deep: #060810;
+        --bg-base: #0a0d12;
+        --panel: #11151c;
+        --panel-2: #161c25;
+        --line: #1f2630;
+        --cyan: #5ad6ff;
+        --cyan-soft: rgba(90, 214, 255, 0.45);
+        --cyan-glow: rgba(90, 214, 255, 0.18);
+        --amber: #ffd166;
+        --amber-soft: rgba(255, 209, 102, 0.40);
+        --magenta: #ff4ad6;
+        --red: #ff5a5a;
+        --red-glow: rgba(255, 90, 90, 0.45);
+        --text: #eaf0f8;
+        --text-dim: #8a96a6;
+        --text-disabled: #4a5260;
       }
       html, body {
         margin: 0;
         padding: 0;
-        background: #111;
-        color: #eee;
+        background:
+          radial-gradient(circle at 50% 0%, #0e1622 0%, var(--bg-base) 45%, var(--bg-deep) 100%);
+        color: var(--text);
         font-family: -apple-system, system-ui, sans-serif;
         overscroll-behavior: none;
         touch-action: manipulation;
         -webkit-user-select: none;
         user-select: none;
+        min-height: 100vh;
       }
       #app {
         display: flex;
@@ -31,14 +49,19 @@
       #topbar {
         display: flex;
         gap: 8px;
-        padding: 8px;
+        padding: 10px 10px 8px;
         align-items: center;
-        background: #1a1a1a;
-        border-bottom: 1px solid #333;
+        background: linear-gradient(180deg, rgba(17, 21, 28, 0.95), rgba(10, 13, 18, 0.95));
+        border-bottom: 1px solid var(--cyan-soft);
+        box-shadow: 0 1px 0 var(--cyan-glow);
         flex-wrap: wrap;
       }
       #topbar .mode {
-        font-weight: bold;
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--cyan);
         flex: 1;
       }
       #canvas-wrap {
@@ -49,49 +72,134 @@
         display: block;
         width: 100%;
         height: auto;
-        background: #222;
+        background: var(--bg-base);
+        box-shadow: 0 0 0 1px var(--line), inset 0 0 24px rgba(0, 0, 0, 0.6);
         touch-action: none;
       }
       #hud {
-        padding: 8px;
-        background: #1a1a1a;
-        border-top: 1px solid #333;
+        padding: 10px;
+        background: linear-gradient(180deg, rgba(17, 21, 28, 0.96), rgba(10, 13, 18, 0.98));
+        border-top: 1px solid var(--cyan-soft);
+        box-shadow: 0 -1px 0 var(--cyan-glow);
         display: flex;
         flex-direction: column;
         gap: 8px;
+        position: relative;
+      }
+      #hud::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.025) 0 1px,
+          transparent 1px 3px
+        );
+        mix-blend-mode: screen;
+        opacity: 0.5;
       }
       .row {
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
         align-items: center;
+        position: relative;
       }
       button {
-        background: #2a2a2a;
-        color: #eee;
-        border: 1px solid #444;
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        color: var(--text);
+        border: 1px solid var(--line);
         padding: 8px 12px;
-        font-size: 14px;
-        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-radius: 3px;
         cursor: pointer;
+        transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease, color 0.12s ease;
       }
-      button:active { background: #3a3a3a; }
-      button.active { background: #4a6; border-color: #6c8; color: #000; }
-      button.primary { background: #46a; border-color: #68c; color: #fff; }
-      button.danger { background: #a33; border-color: #c55; color: #fff; }
-      .status { font-size: 13px; color: #bbb; }
+      button:hover {
+        border-color: var(--cyan-soft);
+        box-shadow: 0 0 0 1px var(--cyan-glow), inset 0 0 8px var(--cyan-glow);
+      }
+      button:active {
+        background: var(--panel);
+        transform: translateY(1px);
+      }
+      button.active {
+        border-color: var(--cyan);
+        color: var(--cyan);
+        box-shadow: inset 0 0 10px var(--cyan-glow);
+      }
+      button.primary {
+        border-color: var(--cyan);
+        color: var(--cyan);
+      }
+      button.primary:hover {
+        box-shadow: 0 0 0 1px var(--cyan-soft), inset 0 0 12px var(--cyan-glow);
+      }
+      button.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+      button.danger:hover {
+        box-shadow: 0 0 0 1px var(--red-glow), inset 0 0 12px var(--red-glow);
+      }
+      button:disabled {
+        color: var(--text-disabled);
+        border-color: var(--line);
+        filter: saturate(0.4);
+        cursor: default;
+        box-shadow: none;
+      }
+      .status {
+        font-size: 12px;
+        color: var(--text-dim);
+        letter-spacing: 0.04em;
+        position: relative;
+      }
       .overlay {
         position: absolute;
         inset: 0;
-        background: rgba(0, 0, 0, 0.75);
+        background: radial-gradient(circle at 50% 50%, rgba(8, 12, 18, 0.85), rgba(0, 0, 0, 0.92));
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 16px;
-        color: #fff;
+        gap: 18px;
+        color: var(--text);
       }
-      .overlay h2 { margin: 0; font-size: 32px; }
+      .overlay h2 {
+        margin: 0;
+        font-size: 36px;
+        font-weight: 800;
+        letter-spacing: 0.20em;
+        text-transform: uppercase;
+        color: var(--cyan);
+        text-shadow:
+          0 0 6px var(--cyan-soft),
+          0 0 18px var(--cyan-glow),
+          0 2px 0 rgba(0, 0, 0, 0.7);
+      }
+      .overlay.victory h2 {
+        color: var(--cyan);
+        text-shadow:
+          0 0 6px var(--cyan-soft),
+          0 0 22px rgba(255, 209, 102, 0.40),
+          0 0 36px rgba(90, 214, 255, 0.30),
+          0 2px 0 rgba(0, 0, 0, 0.7);
+      }
+      .overlay.defeat h2 {
+        color: var(--red);
+        text-shadow:
+          1px 0 0 var(--magenta),
+          -1px 0 0 var(--red),
+          0 0 12px rgba(255, 90, 90, 0.55),
+          0 0 28px rgba(255, 74, 214, 0.35);
+      }
       .turn-banner {
         position: absolute;
         inset: 0;
@@ -99,29 +207,57 @@
         align-items: center;
         justify-content: center;
         font-size: 44px;
-        font-weight: bold;
-        letter-spacing: 0.18em;
-        color: #fff;
-        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95), 0 0 18px rgba(0, 0, 0, 0.8);
+        font-weight: 800;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--text);
         background: rgba(0, 0, 0, 0.55);
         pointer-events: none;
         opacity: 1;
         transition: opacity 0.6s ease-out;
+        overflow: hidden;
+      }
+      .turn-banner::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.05) 0 1px,
+          transparent 1px 3px
+        );
+        mix-blend-mode: overlay;
       }
       .turn-banner.fade { opacity: 0; }
-      .turn-banner.your-turn { color: #5ad6ff; }
-      .turn-banner.enemy-turn { color: #ff5a5a; }
+      .turn-banner.your-turn {
+        color: var(--cyan);
+        text-shadow:
+          0 0 4px rgba(90, 214, 255, 0.9),
+          0 0 12px rgba(90, 214, 255, 0.6),
+          0 0 28px rgba(90, 214, 255, 0.35),
+          0 2px 0 rgba(0, 0, 0, 0.7);
+      }
+      .turn-banner.enemy-turn {
+        color: var(--red);
+        text-shadow:
+          0 0 4px rgba(255, 90, 90, 0.9),
+          0 0 12px rgba(255, 90, 90, 0.55),
+          0 0 28px rgba(255, 90, 90, 0.30),
+          0 2px 0 rgba(0, 0, 0, 0.7);
+      }
       @keyframes pulse-attention {
         0%, 100% {
-          box-shadow: 0 0 0 0 rgba(120, 200, 255, 0.7);
+          box-shadow: 0 0 0 0 rgba(90, 214, 255, 0.7);
         }
         50% {
-          box-shadow: 0 0 0 6px rgba(120, 200, 255, 0);
+          box-shadow: 0 0 0 6px rgba(90, 214, 255, 0);
         }
       }
       button.pulse-attention {
         animation: pulse-attention 1.4s ease-in-out infinite;
-        border-color: #78c8ff;
+        border-color: var(--cyan);
+        color: var(--cyan);
       }
       .hidden { display: none !important; }
     </style>
