@@ -14,10 +14,9 @@ import {
 } from "./render.ts";
 import {
   BASE_HIT,
-  COVER_PENALTY,
   hasLineOfSight,
   resolveShot,
-  targetHasCover,
+  targetCoverPenalty,
 } from "./combat.ts";
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 
@@ -121,13 +120,13 @@ export function startRuntime(
           fill: "rgba(255, 80, 80, 0.55)",
           border: "rgba(255, 80, 80, 1)",
         });
-        const hasCover = targetHasCover(map, selected, u);
-        const hitChance = Math.max(0, BASE_HIT - (hasCover ? COVER_PENALTY : 0));
+        const penalty = targetCoverPenalty(map, selected, u);
+        const hitChance = Math.max(0, BASE_HIT - penalty);
         state.enemyPreviews.push({
           x: u.x,
           y: u.y,
           hitPct: Math.round(hitChance * 100),
-          hasCover,
+          hasCover: penalty > 0,
         });
       }
     }

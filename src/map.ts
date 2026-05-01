@@ -1,4 +1,4 @@
-export type TileType = "floor" | "wall";
+export type TileType = "floor" | "wall" | "half_cover";
 
 export type Unit = {
   id: string;
@@ -102,6 +102,19 @@ export function loadMap(): GameMap | null {
   } catch {
     return null;
   }
+}
+
+export function createTestMap(): GameMap {
+  const map = createEmptyMap();
+  setTile(map, 4, 8, "half_cover");
+  setTile(map, 4, 9, "half_cover");
+  setTile(map, 11, 8, "half_cover");
+  setTile(map, 11, 9, "half_cover");
+  setTile(map, 7, 2, "wall");
+  setTile(map, 8, 13, "wall");
+  map.units.push(makeUnit("player", 3, 8));
+  map.units.push(makeUnit("enemy", 12, 8));
+  return map;
 }
 
 export function validatePlayable(map: GameMap): string | null {

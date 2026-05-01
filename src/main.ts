@@ -1,6 +1,6 @@
 import { startEditor, type EditorHandle } from "./editor.ts";
 import { startRuntime, type RuntimeHandle } from "./runtime.ts";
-import { loadMap, validatePlayable, type GameMap } from "./map.ts";
+import { createTestMap, loadMap, validatePlayable, type GameMap } from "./map.ts";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
@@ -15,7 +15,7 @@ type Mode = "editor" | "runtime";
 let mode: Mode = "editor";
 let editor: EditorHandle | null = null;
 let runtime: RuntimeHandle | null = null;
-let lastEditorMap: GameMap | null = loadMap();
+let lastEditorMap: GameMap | null = loadMap() ?? createTestMap();
 
 const enterEditor = (map: GameMap | null) => {
   runtime?.destroy();

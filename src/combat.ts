@@ -3,6 +3,7 @@ import { getTile, inBounds } from "./map.ts";
 
 export const BASE_HIT = 0.85;
 export const COVER_PENALTY = 0.35;
+export const HALF_COVER_PENALTY = 0.18;
 export const SHOT_DAMAGE = 3;
 
 export function bresenhamLine(
@@ -53,17 +54,18 @@ export function hasLineOfSight(
 }
 
 /**
- * Target has cover from shooter if there is a wall orthogonally adjacent to the
- * target on the side facing the shooter. Picks the dominant axis of the offset.
+ * Returns the hit-chance penalty from cover the target gets vs this shooter.
+ * Picks the dominant-axis adjacent tile on the side facing the shooter; walls
+ * give COVER_PENALTY, half_cover gives HALF_COVER_PENALTY. Penalties don't stack.
  */
-export function targetHasCover(
+export function targetCoverPenalty(
   map: GameMap,
   shooter: Unit,
   target: Unit,
-): boolean {
+): number {
   const dx = shooter.x - target.x;
   const dy = shooter.y - target.y;
-  if (dx === 0 && dy === 0) return false;
+  if (dx === 0 && dy === 0) return 0;
 
   const candidates: { x: number; y: number }[] = [];
   if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) {
@@ -72,10 +74,21 @@ export function targetHasCover(
   if (Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
     candidates.push({ x: target.x, y: target.y + Math.sign(dy) });
   }
+  let best = 0;
   for (const c of candidates) {
-    if (getTile(map, c.x, c.y) === "wall") return true;
+    const t = getTile(map, c.x, c.y);
+    if (t === "wall" && COVER_PENALTY > best) best = COVER_PENALTY;
+    else if (t === "half_cover" && HALF_COVER_PENALTY > best) best = HALF_COVER_PENALTY;
   }
-  return false;
+  return best;
+}
+
+export function targetHasCover(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+): boolean {
+  return targetCoverPenalty(map, shooter, target) > 0;
 }
 
 export type ShotResult = {
@@ -91,8 +104,9 @@ export function resolveShot(
   target: Unit,
   rng: () => number = Math.random,
 ): ShotResult {
-  const hadCover = targetHasCover(map, shooter, target);
-  const hitChance = Math.max(0, BASE_HIT - (hadCover ? COVER_PENALTY : 0));
+  const penalty = targetCoverPenalty(map, shooter, target);
+  const hadCover = penalty > 0;
+  const hitChance = Math.max(0, BASE_HIT - penalty);
   const roll = rng();
   const hit = roll < hitChance;
   const damage = hit ? SHOT_DAMAGE : 0;
