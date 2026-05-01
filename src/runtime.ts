@@ -15,7 +15,7 @@ import {
 } from "./render.ts";
 import {
   BASE_HIT,
-  hasLineOfSight,
+  hasShotLineOfSight,
   resolveShot,
   targetCoverPenalty,
 } from "./combat.ts";
@@ -103,7 +103,7 @@ export function startRuntime(
       let seesAny = false;
       for (const p of map.units) {
         if (p.team !== "player" || p.hp <= 0) continue;
-        if (hasLineOfSight(map, e.x, e.y, p.x, p.y)) {
+        if (hasShotLineOfSight(map, e.x, e.y, p.x, p.y)) {
           seesAny = true;
           break;
         }
@@ -140,7 +140,7 @@ export function startRuntime(
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
-      if (hasLineOfSight(map, selected.x, selected.y, e.x, e.y)) {
+      if (hasShotLineOfSight(map, selected.x, selected.y, e.x, e.y)) {
         state.sightLines!.push({
           fromX: selected.x,
           fromY: selected.y,
@@ -177,7 +177,7 @@ export function startRuntime(
     if (selected.ap >= 2) {
       for (const u of map.units) {
         if (u.team !== "enemy" || u.hp <= 0) continue;
-        if (!hasLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
+        if (!hasShotLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
         state.highlights.push({
           x: u.x,
           y: u.y,
@@ -286,7 +286,7 @@ export function startRuntime(
 
     if (tappedUnit && tappedUnit.team === "enemy") {
       if (selected.ap < 2) return;
-      if (!hasLineOfSight(map, selected.x, selected.y, tappedUnit.x, tappedUnit.y)) {
+      if (!hasShotLineOfSight(map, selected.x, selected.y, tappedUnit.x, tappedUnit.y)) {
         return;
       }
       selected.ap -= 2;
@@ -317,7 +317,7 @@ export function startRuntime(
   const enemySeesAnyPlayer = (enemy: Unit): boolean => {
     for (const p of map.units) {
       if (p.team !== "player" || p.hp <= 0) continue;
-      if (hasLineOfSight(map, enemy.x, enemy.y, p.x, p.y)) return true;
+      if (hasShotLineOfSight(map, enemy.x, enemy.y, p.x, p.y)) return true;
     }
     return false;
   };
@@ -329,8 +329,8 @@ export function startRuntime(
   ) => {
     for (const p of map.units) {
       if (p.team !== "player" || p.hp <= 0 || !p.overwatch) continue;
-      const sawBefore = hasLineOfSight(map, p.x, p.y, from.x, from.y);
-      const seesNow = hasLineOfSight(map, p.x, p.y, to.x, to.y);
+      const sawBefore = hasShotLineOfSight(map, p.x, p.y, from.x, from.y);
+      const seesNow = hasShotLineOfSight(map, p.x, p.y, to.x, to.y);
       if (sawBefore || !seesNow) continue;
       const result = resolveShot(map, p, enemy);
       if (result.hit) {
