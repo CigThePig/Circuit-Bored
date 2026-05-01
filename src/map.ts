@@ -22,7 +22,7 @@ export type GameMap = {
 export const MAP_W = 8;
 export const MAP_H = 8;
 export const UNIT_HP = 8;
-export const UNIT_AP = 2;
+export const UNIT_AP = 4;
 
 const STORAGE_KEY = "circuit-bored.map.v1";
 
@@ -107,7 +107,7 @@ export function loadMap(): GameMap | null {
 export function validatePlayable(map: GameMap): string | null {
   const players = map.units.filter((u) => u.team === "player");
   const enemies = map.units.filter((u) => u.team === "enemy");
-  if (players.length !== 1) return "Map must have exactly 1 player spawn.";
+  if (players.length < 1) return "Map must have at least 1 player spawn.";
   if (enemies.length < 1) return "Map must have at least 1 enemy.";
   return null;
 }

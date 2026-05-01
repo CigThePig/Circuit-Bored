@@ -52,10 +52,12 @@ export function startEditor(
       setTile(map, x, y, "wall");
     } else if (tool === "player") {
       if (map.tiles[y * map.width + x] === "wall") return;
-      map.units = map.units.filter((u) => u.team !== "player");
-      const occupant = unitAt(map, x, y);
-      if (occupant) map.units = map.units.filter((u) => u !== occupant);
-      map.units.push(makeUnit("player", x, y));
+      const existing = unitAt(map, x, y);
+      if (existing && existing.team === "player") {
+        map.units = map.units.filter((u) => u !== existing);
+      } else if (!existing) {
+        map.units.push(makeUnit("player", x, y));
+      }
     } else if (tool === "enemy") {
       if (map.tiles[y * map.width + x] === "wall") return;
       const existing = unitAt(map, x, y);
@@ -146,7 +148,7 @@ export function startEditor(
 
   const status = document.createElement("div");
   status.className = "status";
-  status.textContent = "Tap to paint. Player tool places one player; tap an enemy to remove it.";
+  status.textContent = "Tap to paint. Tap a unit with its tool to remove it.";
   hud.appendChild(status);
 
   redraw();
