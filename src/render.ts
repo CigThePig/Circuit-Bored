@@ -46,6 +46,85 @@ export type RenderState = {
   sightLines?: SightLine[];
 };
 
+const PALETTE = {
+  BG: "#0a0d12",
+
+  FLOOR_BASE: "#1d232c",
+  FLOOR_RIM: "#2a3340",
+  FLOOR_GLYPH: "rgba(140, 90, 200, 0.10)",
+
+  WALL_BASE: "#11151c",
+  WALL_BEVEL_HI: "rgba(120, 170, 210, 0.22)",
+  WALL_BEVEL_LO: "rgba(0, 0, 0, 0.55)",
+  WALL_PANEL: "rgba(180, 220, 255, 0.06)",
+  WALL_BRACKET: "rgba(140, 200, 235, 0.30)",
+  WALL_LIGHT: "#ff3a6a",
+
+  HALFCOVER_FILL: "#5b3a1f",
+  HALFCOVER_TOP: "#a87246",
+  HALFCOVER_RIM: "#2c1a0a",
+  HAZARD_YELLOW: "#f5c518",
+  HAZARD_BLACK: "#1a1409",
+
+  PLAYER_BODY: "#3a7bd5",
+  PLAYER_BODY_SPENT: "#1f4a85",
+  PLAYER_ACCENT: "#ff4ad6",
+  PLAYER_HEAD: "#cfeaff",
+  ENEMY_BODY: "#d54a4a",
+  ENEMY_BODY_SPENT: "#7a2828",
+  ENEMY_VISOR: "#1a0606",
+  ENEMY_HEAD: "#f5c4c4",
+  UNIT_OUTLINE: "rgba(0, 0, 0, 0.65)",
+  SPENT_VEIL: "rgba(0, 0, 0, 0.40)",
+
+  FRESH_PLAYER: "#5ad6ff",
+  FRESH_ENEMY: "#ff8a3a",
+  FRESH_GLOW_PLAYER: "rgba(90, 214, 255, 0.55)",
+  FRESH_GLOW_ENEMY: "rgba(255, 138, 58, 0.55)",
+  OVERWATCH: "#ffd166",
+  SELECTED: "#5ad6ff",
+  SELECTED_GLOW: "rgba(90, 214, 255, 0.45)",
+
+  HP_CHIP_BG: "rgba(8, 12, 18, 0.78)",
+  HP_CHIP_BORDER: "rgba(90, 214, 255, 0.55)",
+  HP_TEXT: "#eaf6ff",
+
+  PIP_PLAYER_FILL: "#5ad6ff",
+  PIP_ENEMY_FILL: "#ff8a3a",
+  PIP_EMPTY_STROKE: "rgba(220, 230, 240, 0.55)",
+  PIP_OUTLINE: "rgba(0, 0, 0, 0.7)",
+
+  HL_FILL_OPACITY: 0.22,
+  HL_BRACKET_LEN: 0.22,
+
+  SIGHT_CLEAR_OUTER: "rgba(255, 216, 58, 0.18)",
+  SIGHT_CLEAR_INNER: "rgba(255, 240, 160, 0.95)",
+  SIGHT_COVER_OUTER: "rgba(255, 120, 40, 0.18)",
+  SIGHT_COVER_INNER: "rgba(255, 180, 90, 0.95)",
+
+  COVER_WALL: "#7fe3ff",
+  COVER_HALF: "#ffb347",
+  COVER_HATCH: "rgba(10, 30, 45, 0.55)",
+  COVER_OUTLINE: "rgba(8, 12, 18, 0.85)",
+
+  THREAT_RING: "#ff4040",
+  THREAT_PUPIL: "#1a0000",
+  THREAT_GLINT: "#ffd0d0",
+  THREAT_SHADOW: "rgba(0, 0, 0, 0.7)",
+
+  PREVIEW_BG: "rgba(8, 12, 18, 0.85)",
+  PREVIEW_BORDER_HI: "#ffd166",
+  PREVIEW_BORDER_LO: "#7fe3ff",
+  PREVIEW_TEXT_HI: "#ffd166",
+  PREVIEW_TEXT_LO: "#cfdce8",
+  PREVIEW_SHIELD: "#7fe3ff",
+  PREVIEW_SHIELD_OUTLINE: "rgba(0, 0, 0, 0.85)",
+
+  FLOAT_STROKE: "rgba(0, 0, 0, 0.85)",
+} as const;
+
+type Geom = { px: number; py: number; cell: number };
+
 export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
   const cssWidth = Math.min(window.innerWidth, 480);
   const cell = Math.floor(cssWidth / map.width);
@@ -67,275 +146,739 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   const cell = cssW / map.width;
   const now = performance.now();
 
-  ctx.clearRect(0, 0, cssW, cssW);
+  ctx.fillStyle = PALETTE.BG;
+  ctx.fillRect(0, 0, cssW, cssW);
 
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
       const t = map.tiles[y * map.width + x];
+      const g: Geom = { px: x * cell, py: y * cell, cell };
       if (t === "wall") {
-        ctx.fillStyle = "#3a3a3a";
+        drawWallTile(ctx, g, x, y);
+      } else if (t === "half_cover") {
+        drawHalfCoverTile(ctx, g, x, y);
       } else {
-        ctx.fillStyle = "#bbbbbb";
+        drawFloorTile(ctx, g, x, y);
       }
-      ctx.fillRect(x * cell, y * cell, cell, cell);
-      if (t === "half_cover") {
-        const inset = Math.max(2, Math.floor(cell * 0.18));
-        ctx.fillStyle = "#8a6f4a";
-        ctx.fillRect(x * cell + inset, y * cell + inset, cell - inset * 2, cell - inset * 2);
-        ctx.strokeStyle = "#5a4628";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(
-          x * cell + inset + 0.5,
-          y * cell + inset + 0.5,
-          cell - inset * 2 - 1,
-          cell - inset * 2 - 1,
-        );
-      }
-      ctx.strokeStyle = t === "wall" ? "#222" : "#999";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x * cell + 0.5, y * cell + 0.5, cell - 1, cell - 1);
     }
   }
 
   for (const h of state.highlights) {
-    ctx.fillStyle = h.fill;
-    ctx.fillRect(h.x * cell, h.y * cell, cell, cell);
-    ctx.strokeStyle = h.border;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(h.x * cell + 1, h.y * cell + 1, cell - 2, cell - 2);
+    const g: Geom = { px: h.x * cell, py: h.y * cell, cell };
+    drawHighlight(ctx, g, h.fill, h.border);
   }
 
   if (state.sightLines && state.sightLines.length > 0) {
-    ctx.save();
-    ctx.lineWidth = Math.max(1, Math.floor(cell * 0.08));
-    ctx.lineCap = "round";
     for (const line of state.sightLines) {
-      ctx.strokeStyle = line.hasCover
-        ? "rgba(255, 154, 31, 0.55)"
-        : "rgba(255, 216, 58, 0.55)";
-      ctx.beginPath();
-      ctx.moveTo(line.fromX * cell + cell / 2, line.fromY * cell + cell / 2);
-      ctx.lineTo(line.toX * cell + cell / 2, line.toY * cell + cell / 2);
-      ctx.stroke();
+      drawSightLine(ctx, cell, line);
     }
-    ctx.restore();
   }
 
   for (const u of map.units) {
     if (u.hp <= 0) continue;
-    const px = u.x * cell;
-    const py = u.y * cell;
-    const pad = Math.max(2, Math.floor(cell * 0.12));
-    const cx = px + cell / 2;
-    const cy = py + cell / 2;
-    const fresh = u.ap === u.maxAp;
-    const spent = u.ap === 0;
-
-    let bodyColor: string;
-    if (u.team === "player") {
-      bodyColor = spent ? "#1f4a85" : "#3a7bd5";
-    } else {
-      bodyColor = spent ? "#7a2828" : "#d54a4a";
-    }
-    ctx.fillStyle = bodyColor;
-    ctx.fillRect(px + pad, py + pad, cell - pad * 2, cell - pad * 2);
-
-    if (spent) {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
-      ctx.fillRect(px + pad, py + pad, cell - pad * 2, cell - pad * 2);
-      const dotR = Math.max(2, Math.floor(cell * 0.07));
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.arc(px + pad + dotR + 2, py + pad + dotR + 2, dotR, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    if (fresh) {
-      const ringColor = u.team === "player" ? "#5ad6ff" : "#ff8a3a";
-      ctx.strokeStyle = ringColor;
-      ctx.lineWidth = Math.max(2, Math.floor(cell * 0.06));
-      ctx.beginPath();
-      ctx.arc(cx, cy, cell * 0.46, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    if (u.overwatch) {
-      ctx.strokeStyle = "#ffe066";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    if (state.selected && state.selected.id === u.id) {
-      ctx.strokeStyle = "#ffd83a";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(px + 2, py + 2, cell - 4, cell - 4);
-    }
-
-    ctx.fillStyle = "#fff";
-    ctx.font = `${Math.floor(cell * 0.32)}px -apple-system, system-ui, sans-serif`;
-    ctx.textAlign = "right";
-    ctx.textBaseline = "top";
-    ctx.fillText(`${u.hp}`, px + cell - 4, py + 2);
-
-    const pipCount = u.maxAp;
-    if (pipCount > 0) {
-      const pipR = Math.max(1.5, cell * 0.05);
-      const gap = Math.max(1, pipR * 1.1);
-      const totalW = pipCount * pipR * 2 + (pipCount - 1) * gap;
-      const startX = cx - totalW / 2 + pipR;
-      const pipY = py + cell - pipR - 2;
-      for (let i = 0; i < pipCount; i++) {
-        const pcx = startX + i * (pipR * 2 + gap);
-        ctx.beginPath();
-        ctx.arc(pcx, pipY, pipR, 0, Math.PI * 2);
-        if (i < u.ap) {
-          ctx.fillStyle = "#ffffff";
-          ctx.fill();
-        } else {
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        }
-      }
-    }
+    const g: Geom = { px: u.x * cell, py: u.y * cell, cell };
+    const isSelected = state.selected !== null && state.selected.id === u.id;
+    drawUnit(ctx, g, u, isSelected);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
-    const thickness = Math.max(3, Math.floor(cell * 0.1));
-    const halfInset = Math.max(2, Math.floor(cell * 0.18));
-    const edgeOffset = Math.max(1, Math.floor(cell * 0.04));
-    const hatchSpacing = Math.max(3, Math.floor(cell * 0.18));
     for (const ind of state.coverIndicators) {
-      const px = ind.x * cell;
-      const py = ind.y * cell;
-      const isWall = ind.kind === "wall";
-      const fillColor = isWall ? "#9bdcff" : "#ff9a1f";
-      const inset = isWall ? 0 : halfInset;
-
-      let bx = 0;
-      let by = 0;
-      let bw = 0;
-      let bh = 0;
-      if (ind.side === "n") {
-        bx = px + inset;
-        by = py + edgeOffset;
-        bw = cell - inset * 2;
-        bh = thickness;
-      } else if (ind.side === "s") {
-        bx = px + inset;
-        by = py + cell - edgeOffset - thickness;
-        bw = cell - inset * 2;
-        bh = thickness;
-      } else if (ind.side === "w") {
-        bx = px + edgeOffset;
-        by = py + inset;
-        bw = thickness;
-        bh = cell - inset * 2;
-      } else {
-        bx = px + cell - edgeOffset - thickness;
-        by = py + inset;
-        bw = thickness;
-        bh = cell - inset * 2;
-      }
-
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(bx, by, bw, bh);
-
-      if (isWall) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(bx, by, bw, bh);
-        ctx.clip();
-        ctx.strokeStyle = "rgba(26, 51, 64, 0.55)";
-        ctx.lineWidth = 1;
-        const start = -bh;
-        const end = bw + bh;
-        for (let d = start; d <= end; d += hatchSpacing) {
-          ctx.beginPath();
-          ctx.moveTo(bx + d, by);
-          ctx.lineTo(bx + d - bh, by + bh);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      ctx.strokeStyle = "rgba(20, 20, 20, 0.85)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      drawCoverIndicator(ctx, cell, ind);
     }
   }
 
   if (state.threatMarkers && state.threatMarkers.length > 0) {
     const pulse = 0.6 + 0.4 * (Math.sin((now / 1200) * Math.PI * 2) * 0.5 + 0.5);
     for (const m of state.threatMarkers) {
-      const px = m.x * cell;
-      const py = m.y * cell;
-      const ecx = px + cell / 2;
-      const ecyDesired = py - cell * 0.05;
-      const ecy = Math.max(ecyDesired, cell * 0.12);
-      const rx = cell * 0.18;
-      const ry = cell * 0.1;
-      ctx.save();
-      ctx.globalAlpha = pulse;
-      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-      ctx.beginPath();
-      ctx.ellipse(ecx, ecy, rx + 1, ry + 1, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#ff4040";
-      ctx.beginPath();
-      ctx.ellipse(ecx, ecy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#000";
-      ctx.beginPath();
-      ctx.arc(ecx, ecy, Math.max(1, cell * 0.05), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      drawThreatMarker(ctx, cell, m, pulse);
     }
   }
 
   for (const p of state.enemyPreviews) {
-    const px = p.x * cell;
-    const py = p.y * cell;
-    const pctText = `${p.hitPct}%`;
-    const pctFontSize = Math.floor(cell * 0.28);
-    ctx.font = `bold ${pctFontSize}px -apple-system, system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    const textWidth = ctx.measureText(pctText).width;
-    const padX = 4;
-    const pillH = pctFontSize + 4;
-    const pillW = textWidth + padX * 2;
-    const pillX = px + cell / 2 - pillW / 2;
-    const pillY = py + 2;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
-    ctx.fillRect(pillX, pillY, pillW, pillH);
-    ctx.fillStyle = p.hitPct >= 60 ? "#ffd83a" : "#ffffff";
-    ctx.fillText(pctText, px + cell / 2, pillY + 2);
-
-    if (p.hasCover) {
-      const shieldSize = Math.floor(cell * 0.32);
-      ctx.font = `${shieldSize}px -apple-system, system-ui, sans-serif`;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
-      ctx.fillText("\u{1F6E1}", px + 3, py + 3);
-      ctx.fillStyle = "#9bdcff";
-      ctx.fillText("\u{1F6E1}", px + 2, py + 2);
-    }
+    const g: Geom = { px: p.x * cell, py: p.y * cell, cell };
+    drawEnemyPreview(ctx, g, p);
   }
 
   for (const t of state.floatingTexts) {
     if (t.expiresAt < now) continue;
-    const tcx = t.x * cell + cell / 2;
-    const tcy = t.y * cell + cell / 2;
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.font = `bold ${Math.floor(cell * 0.32)}px -apple-system, system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(t.text, tcx + 1, tcy + 1);
-    ctx.fillStyle = t.color;
-    ctx.fillText(t.text, tcx, tcy);
+    drawFloatingText(ctx, cell, t);
   }
+}
+
+function tileHash(x: number, y: number): number {
+  return (((x * 73856093) ^ (y * 19349663)) >>> 0) & 0xff;
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function unitBodyPath(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  pad: number,
+  r: number,
+): void {
+  const left = px + pad;
+  const right = px + cell - pad;
+  const top = py + pad;
+  const bottom = py + cell - pad;
+  ctx.beginPath();
+  ctx.moveTo(left, top + r);
+  ctx.quadraticCurveTo(left, top, left + r, top);
+  ctx.lineTo(right - r, top);
+  ctx.quadraticCurveTo(right, top, right, top + r);
+  ctx.lineTo(right, bottom);
+  ctx.lineTo(left, bottom);
+  ctx.closePath();
+}
+
+function drawFloorTile(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  x: number,
+  y: number,
+): void {
+  const { px, py, cell } = g;
+  ctx.fillStyle = PALETTE.FLOOR_BASE;
+  ctx.fillRect(px, py, cell, cell);
+  ctx.strokeStyle = PALETTE.FLOOR_RIM;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 0.5, py + 0.5, cell - 1, cell - 1);
+
+  if ((x + y) % 3 !== 0) return;
+
+  const h = tileHash(x, y);
+  const variant = (h >> 3) & 3;
+  const cx = px + cell / 2;
+  const cy = py + cell / 2;
+  ctx.save();
+  ctx.strokeStyle = PALETTE.FLOOR_GLYPH;
+  ctx.fillStyle = PALETTE.FLOOR_GLYPH;
+  ctx.lineWidth = 1;
+  if (variant === 0) {
+    const arm = cell * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - arm);
+    ctx.lineTo(cx, cy + arm);
+    ctx.moveTo(cx - arm, cy);
+    ctx.lineTo(cx + arm, cy);
+    ctx.stroke();
+  } else if (variant === 1) {
+    const arm = cell * 0.14;
+    ctx.beginPath();
+    ctx.moveTo(cx - arm, cy - arm);
+    ctx.lineTo(cx + arm, cy + arm);
+    ctx.moveTo(cx + arm, cy - arm);
+    ctx.lineTo(cx - arm, cy + arm);
+    ctx.stroke();
+  } else if (variant === 2) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, cell * 0.16, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    const step = cell * 0.12;
+    for (let i = -1; i <= 1; i++) {
+      ctx.fillRect(cx - 0.5, cy + i * step - 0.5, 1, 1);
+    }
+  }
+  ctx.restore();
+}
+
+function drawWallTile(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  x: number,
+  y: number,
+): void {
+  const { px, py, cell } = g;
+  ctx.fillStyle = PALETTE.WALL_BASE;
+  ctx.fillRect(px, py, cell, cell);
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = PALETTE.WALL_BEVEL_HI;
+  ctx.beginPath();
+  ctx.moveTo(px + 0.5, py + cell - 1);
+  ctx.lineTo(px + 0.5, py + 0.5);
+  ctx.lineTo(px + cell - 1, py + 0.5);
+  ctx.stroke();
+
+  ctx.strokeStyle = PALETTE.WALL_BEVEL_LO;
+  ctx.beginPath();
+  ctx.moveTo(px + cell - 0.5, py + 1);
+  ctx.lineTo(px + cell - 0.5, py + cell - 0.5);
+  ctx.lineTo(px + 1, py + cell - 0.5);
+  ctx.stroke();
+
+  ctx.strokeStyle = PALETTE.WALL_PANEL;
+  ctx.beginPath();
+  const seamX = Math.floor(px + cell / 2) + 0.5;
+  ctx.moveTo(seamX, py + cell * 0.18);
+  ctx.lineTo(seamX, py + cell * 0.82);
+  ctx.stroke();
+
+  if (cell >= 22) {
+    const len = Math.max(2, Math.floor(cell * 0.12));
+    ctx.strokeStyle = PALETTE.WALL_BRACKET;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + 1, py + 1 + len);
+    ctx.lineTo(px + 1, py + 1);
+    ctx.lineTo(px + 1 + len, py + 1);
+    ctx.moveTo(px + cell - 1 - len, py + cell - 1);
+    ctx.lineTo(px + cell - 1, py + cell - 1);
+    ctx.lineTo(px + cell - 1, py + cell - 1 - len);
+    ctx.stroke();
+  }
+
+  const h = tileHash(x, y);
+  if ((h & 0x1f) === 0) {
+    const dotSize = Math.max(1, Math.floor(cell * 0.07));
+    ctx.fillStyle = PALETTE.WALL_LIGHT;
+    ctx.fillRect(px + cell - dotSize - 3, py + 3, dotSize, dotSize);
+  }
+}
+
+function drawHalfCoverTile(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  x: number,
+  y: number,
+): void {
+  drawFloorTile(ctx, g, x, y);
+  const { px, py, cell } = g;
+  const inset = Math.max(2, Math.floor(cell * 0.18));
+  const ox = px + inset;
+  const oy = py + inset;
+  const ow = cell - inset * 2;
+  const oh = cell - inset * 2;
+
+  ctx.fillStyle = PALETTE.HALFCOVER_FILL;
+  ctx.fillRect(ox, oy, ow, oh);
+
+  const topBand = Math.max(2, Math.floor(cell * 0.07));
+  ctx.fillStyle = PALETTE.HALFCOVER_TOP;
+  ctx.fillRect(ox, oy, ow, topBand);
+
+  ctx.strokeStyle = PALETTE.HALFCOVER_RIM;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ox + 0.5, oy + 0.5, ow - 1, oh - 1);
+
+  if (cell >= 22) {
+    const stripeH = Math.max(2, Math.floor(cell * 0.09));
+    const stripeY = oy + topBand;
+    const pillCount = 3;
+    const totalGap = ow * 0.10;
+    const pillW = (ow - totalGap) / pillCount;
+    const gap = totalGap / (pillCount + 1);
+    for (let i = 0; i < pillCount; i++) {
+      const startX = ox + gap + i * (pillW + gap);
+      ctx.fillStyle = i % 2 === 0 ? PALETTE.HAZARD_YELLOW : PALETTE.HAZARD_BLACK;
+      ctx.fillRect(startX, stripeY, pillW, stripeH);
+    }
+  } else {
+    ctx.fillStyle = PALETTE.HAZARD_YELLOW;
+    ctx.fillRect(ox, oy + topBand, ow, 1);
+  }
+}
+
+function drawHighlight(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  fill: string,
+  border: string,
+): void {
+  const { px, py, cell } = g;
+  ctx.save();
+  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
+  ctx.fillStyle = fill;
+  ctx.fillRect(px, py, cell, cell);
+  ctx.restore();
+
+  const len = Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN));
+  const inset = 1.5;
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(px + inset, py + inset + len);
+  ctx.lineTo(px + inset, py + inset);
+  ctx.lineTo(px + inset + len, py + inset);
+  ctx.moveTo(px + cell - inset - len, py + inset);
+  ctx.lineTo(px + cell - inset, py + inset);
+  ctx.lineTo(px + cell - inset, py + inset + len);
+  ctx.moveTo(px + inset, py + cell - inset - len);
+  ctx.lineTo(px + inset, py + cell - inset);
+  ctx.lineTo(px + inset + len, py + cell - inset);
+  ctx.moveTo(px + cell - inset - len, py + cell - inset);
+  ctx.lineTo(px + cell - inset, py + cell - inset);
+  ctx.lineTo(px + cell - inset, py + cell - inset - len);
+  ctx.stroke();
+}
+
+function drawSightLine(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  line: SightLine,
+): void {
+  const fromX = line.fromX * cell + cell / 2;
+  const fromY = line.fromY * cell + cell / 2;
+  const toX = line.toX * cell + cell / 2;
+  const toY = line.toY * cell + cell / 2;
+
+  const outerW = Math.max(3, Math.floor(cell * 0.22));
+  const innerW = Math.max(1, Math.floor(cell * 0.06));
+
+  ctx.save();
+  ctx.lineCap = "round";
+
+  ctx.strokeStyle = line.hasCover ? PALETTE.SIGHT_COVER_OUTER : PALETTE.SIGHT_CLEAR_OUTER;
+  ctx.lineWidth = outerW;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+
+  ctx.strokeStyle = line.hasCover ? PALETTE.SIGHT_COVER_INNER : PALETTE.SIGHT_CLEAR_INNER;
+  ctx.lineWidth = innerW;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawUnit(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  u: Unit,
+  isSelected: boolean,
+): void {
+  const { px, py, cell } = g;
+  const pad = Math.max(2, Math.floor(cell * 0.12));
+  const cx = px + cell / 2;
+  const cy = py + cell / 2;
+  const fresh = u.ap === u.maxAp;
+  const spent = u.ap === 0;
+  const r = Math.max(2, Math.floor(cell * 0.10));
+  const showDetail = cell >= 18;
+  const headR = Math.max(2, Math.floor(cell * 0.13));
+  const headCy = py + pad + r * 0.6;
+
+  const bodyColor =
+    u.team === "player"
+      ? spent
+        ? PALETTE.PLAYER_BODY_SPENT
+        : PALETTE.PLAYER_BODY
+      : spent
+        ? PALETTE.ENEMY_BODY_SPENT
+        : PALETTE.ENEMY_BODY;
+
+  unitBodyPath(ctx, px, py, cell, pad, r);
+  ctx.fillStyle = bodyColor;
+  ctx.fill();
+  ctx.strokeStyle = PALETTE.UNIT_OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  if (showDetail) {
+    if (u.team === "player") {
+      const stripeY = py + pad + cell * 0.40;
+      ctx.save();
+      unitBodyPath(ctx, px, py, cell, pad, r);
+      ctx.clip();
+      ctx.strokeStyle = PALETTE.PLAYER_ACCENT;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px + pad, stripeY + 0.5);
+      ctx.lineTo(px + cell - pad, stripeY + 0.5);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      const visorY = py + pad + cell * 0.10;
+      const visorH = Math.max(2, Math.floor(cell * 0.08));
+      ctx.save();
+      unitBodyPath(ctx, px, py, cell, pad, r);
+      ctx.clip();
+      ctx.fillStyle = PALETTE.ENEMY_VISOR;
+      ctx.fillRect(px + pad, visorY, cell - pad * 2, visorH);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = u.team === "player" ? PALETTE.PLAYER_HEAD : PALETTE.ENEMY_HEAD;
+    ctx.beginPath();
+    ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.UNIT_OUTLINE;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  if (spent) {
+    ctx.fillStyle = PALETTE.SPENT_VEIL;
+    unitBodyPath(ctx, px, py, cell, pad, r);
+    ctx.fill();
+    if (showDetail) {
+      ctx.beginPath();
+      ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  if (fresh && !spent) {
+    const ringColor = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
+    const glowColor =
+      u.team === "player" ? PALETTE.FRESH_GLOW_PLAYER : PALETTE.FRESH_GLOW_ENEMY;
+    ctx.save();
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = Math.max(4, Math.floor(cell * 0.18));
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = Math.max(2, Math.floor(cell * 0.06));
+    ctx.beginPath();
+    ctx.arc(cx, cy, cell * 0.46, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  if (u.overwatch) {
+    const ringR = cell * 0.42;
+    ctx.strokeStyle = PALETTE.OVERWATCH;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+    const tickLen = Math.max(2, Math.floor(cell * 0.06));
+    ctx.lineWidth = 2;
+    const dirs: [number, number][] = [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ];
+    ctx.beginPath();
+    for (const [dx, dy] of dirs) {
+      const ix = cx + dx * (ringR - 2);
+      const iy = cy + dy * (ringR - 2);
+      const ox = cx + dx * (ringR + tickLen);
+      const oy = cy + dy * (ringR + tickLen);
+      ctx.moveTo(ix, iy);
+      ctx.lineTo(ox, oy);
+    }
+    ctx.stroke();
+  }
+
+  if (isSelected) {
+    const len = Math.max(4, Math.floor(cell * 0.22));
+    const inset = 2;
+    ctx.save();
+    ctx.shadowColor = PALETTE.SELECTED_GLOW;
+    ctx.shadowBlur = 4;
+    ctx.strokeStyle = PALETTE.SELECTED;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + inset, py + inset + len);
+    ctx.lineTo(px + inset, py + inset);
+    ctx.lineTo(px + inset + len, py + inset);
+    ctx.moveTo(px + cell - inset - len, py + inset);
+    ctx.lineTo(px + cell - inset, py + inset);
+    ctx.lineTo(px + cell - inset, py + inset + len);
+    ctx.moveTo(px + inset, py + cell - inset - len);
+    ctx.lineTo(px + inset, py + cell - inset);
+    ctx.lineTo(px + inset + len, py + cell - inset);
+    ctx.moveTo(px + cell - inset - len, py + cell - inset);
+    ctx.lineTo(px + cell - inset, py + cell - inset);
+    ctx.lineTo(px + cell - inset, py + cell - inset - len);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  drawHpChip(ctx, g, u);
+  drawApPips(ctx, g, u);
+}
+
+function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
+  const { px, py, cell } = g;
+  const fontSize = Math.max(8, Math.floor(cell * 0.30));
+  const text = `${u.hp}`;
+  ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  const textW = ctx.measureText(text).width;
+  const padX = 3;
+  const chipW = textW + padX * 2;
+  const chipH = fontSize + 2;
+  const chipX = px + cell - chipW - 2;
+  const chipY = py + 1;
+
+  roundRect(ctx, chipX, chipY, chipW, chipH, 2);
+  ctx.fillStyle = PALETTE.HP_CHIP_BG;
+  ctx.fill();
+  ctx.strokeStyle = PALETTE.HP_CHIP_BORDER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = PALETTE.HP_TEXT;
+  ctx.fillText(text, chipX + chipW - padX, chipY + 1);
+}
+
+function drawApPips(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
+  const { px, py, cell } = g;
+  const pipCount = u.maxAp;
+  if (pipCount <= 0) return;
+  const cx = px + cell / 2;
+  const pipR = Math.max(1.5, cell * 0.05);
+  const gap = Math.max(1, pipR * 1.1);
+  const totalW = pipCount * pipR * 2 + (pipCount - 1) * gap;
+  const startX = cx - totalW / 2 + pipR;
+  const pipY = py + cell - pipR - 2;
+  const fillColor = u.team === "player" ? PALETTE.PIP_PLAYER_FILL : PALETTE.PIP_ENEMY_FILL;
+  for (let i = 0; i < pipCount; i++) {
+    const pcx = startX + i * (pipR * 2 + gap);
+    ctx.beginPath();
+    ctx.arc(pcx, pipY, pipR, 0, Math.PI * 2);
+    if (i < u.ap) {
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.strokeStyle = PALETTE.PIP_OUTLINE;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = PALETTE.PIP_EMPTY_STROKE;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+}
+
+function drawCoverIndicator(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  ind: CoverIndicator,
+): void {
+  const px = ind.x * cell;
+  const py = ind.y * cell;
+  const isWall = ind.kind === "wall";
+  const fillColor = isWall ? PALETTE.COVER_WALL : PALETTE.COVER_HALF;
+  const thickness = Math.max(3, Math.floor(cell * 0.1));
+  const halfInset = Math.max(2, Math.floor(cell * 0.18));
+  const edgeOffset = Math.max(1, Math.floor(cell * 0.04));
+  const hatchSpacing = Math.max(3, Math.floor(cell * 0.18));
+  const inset = isWall ? 0 : halfInset;
+
+  let bx = 0;
+  let by = 0;
+  let bw = 0;
+  let bh = 0;
+  if (ind.side === "n") {
+    bx = px + inset;
+    by = py + edgeOffset;
+    bw = cell - inset * 2;
+    bh = thickness;
+  } else if (ind.side === "s") {
+    bx = px + inset;
+    by = py + cell - edgeOffset - thickness;
+    bw = cell - inset * 2;
+    bh = thickness;
+  } else if (ind.side === "w") {
+    bx = px + edgeOffset;
+    by = py + inset;
+    bw = thickness;
+    bh = cell - inset * 2;
+  } else {
+    bx = px + cell - edgeOffset - thickness;
+    by = py + inset;
+    bw = thickness;
+    bh = cell - inset * 2;
+  }
+
+  const radius = Math.max(1, Math.floor(thickness * 0.3));
+  roundRect(ctx, bx, by, bw, bh, radius);
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  if (isWall) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bx, by, bw, bh);
+    ctx.clip();
+    ctx.strokeStyle = PALETTE.COVER_HATCH;
+    ctx.lineWidth = 1;
+    const start = -bh;
+    const end = bw + bh;
+    for (let d = start; d <= end; d += hatchSpacing) {
+      ctx.beginPath();
+      ctx.moveTo(bx + d, by);
+      ctx.lineTo(bx + d - bh, by + bh);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  roundRect(ctx, bx + 0.5, by + 0.5, bw - 1, bh - 1, radius);
+  ctx.strokeStyle = PALETTE.COVER_OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawThreatMarker(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  m: ThreatMarker,
+  pulse: number,
+): void {
+  const px = m.x * cell;
+  const py = m.y * cell;
+  const ecx = px + cell / 2;
+  const ecyDesired = py - cell * 0.05;
+  const ecy = Math.max(ecyDesired, cell * 0.20);
+  const r = cell * 0.18;
+
+  ctx.save();
+  ctx.globalAlpha = pulse;
+
+  ctx.fillStyle = PALETTE.THREAT_SHADOW;
+  ctx.beginPath();
+  ctx.arc(ecx, ecy + 1, r + 1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = PALETTE.THREAT_RING;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(ecx, ecy, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = PALETTE.THREAT_PUPIL;
+  ctx.beginPath();
+  ctx.arc(ecx, ecy, r * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = PALETTE.THREAT_GLINT;
+  ctx.beginPath();
+  ctx.arc(ecx + r * 0.18, ecy - r * 0.22, Math.max(0.8, cell * 0.025), 0, Math.PI * 2);
+  ctx.fill();
+
+  const tickLen = Math.max(2, Math.floor(cell * 0.06));
+  ctx.strokeStyle = PALETTE.THREAT_RING;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ecx, ecy - r - 1);
+  ctx.lineTo(ecx, ecy - r - 1 - tickLen);
+  ctx.moveTo(ecx, ecy + r + 1);
+  ctx.lineTo(ecx, ecy + r + 1 + tickLen);
+  ctx.moveTo(ecx - r - 1, ecy);
+  ctx.lineTo(ecx - r - 1 - tickLen, ecy);
+  ctx.moveTo(ecx + r + 1, ecy);
+  ctx.lineTo(ecx + r + 1 + tickLen, ecy);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawShieldIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  h: number,
+  fill: string,
+  outline: string,
+): void {
+  const w = h * 0.80;
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.5, y);
+  ctx.lineTo(x + w, y + h * 0.18);
+  ctx.quadraticCurveTo(x + w, y + h * 0.35, x + w * 0.92, y + h * 0.55);
+  ctx.lineTo(x + w * 0.5, y + h);
+  ctx.lineTo(x + w * 0.08, y + h * 0.55);
+  ctx.quadraticCurveTo(x, y + h * 0.35, x, y + h * 0.18);
+  ctx.lineTo(x + w * 0.5, y);
+  ctx.closePath();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = outline;
+  ctx.stroke();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.20, y + h * 0.16);
+  ctx.lineTo(x + w * 0.42, y + h * 0.09);
+  ctx.stroke();
+}
+
+function drawEnemyPreview(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  p: EnemyPreview,
+): void {
+  const { px, py, cell } = g;
+  const text = `${p.hitPct}%`;
+  const fontSize = Math.max(8, Math.floor(cell * 0.28));
+  ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const textW = ctx.measureText(text).width;
+  const padX = 4;
+  const pillH = fontSize + 4;
+  const pillW = textW + padX * 2;
+  const pillX = px + cell / 2 - pillW / 2;
+  const pillY = py + 2;
+
+  roundRect(ctx, pillX, pillY, pillW, pillH, 3);
+  ctx.fillStyle = PALETTE.PREVIEW_BG;
+  ctx.fill();
+  ctx.strokeStyle =
+    p.hitPct >= 60 ? PALETTE.PREVIEW_BORDER_HI : PALETTE.PREVIEW_BORDER_LO;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = p.hitPct >= 60 ? PALETTE.PREVIEW_TEXT_HI : PALETTE.PREVIEW_TEXT_LO;
+  ctx.fillText(text, px + cell / 2, pillY + 2);
+
+  if (p.hasCover) {
+    const shieldH = Math.max(8, Math.floor(cell * 0.30));
+    drawShieldIcon(ctx, px + 3, py + 3, shieldH, PALETTE.PREVIEW_SHIELD, PALETTE.PREVIEW_SHIELD_OUTLINE);
+  }
+}
+
+function drawFloatingText(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  t: FloatingText,
+): void {
+  const tcx = t.x * cell + cell / 2;
+  const tcy = t.y * cell + cell / 2;
+  const fontSize = Math.max(10, Math.floor(cell * 0.32));
+  ctx.save();
+  ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = PALETTE.FLOAT_STROKE;
+  ctx.strokeText(t.text, tcx, tcy);
+  ctx.fillStyle = t.color;
+  ctx.fillText(t.text, tcx, tcy);
+  ctx.restore();
 }
