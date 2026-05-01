@@ -146,6 +146,7 @@ export function startRuntime(
           fromY: selected.y,
           toX: e.x,
           toY: e.y,
+          hasCover: targetCoverPenalty(map, selected, e) > 0,
         });
       }
     }

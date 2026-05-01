@@ -32,6 +32,7 @@ export type SightLine = {
   fromY: number;
   toX: number;
   toY: number;
+  hasCover: boolean;
 };
 
 export type RenderState = {
@@ -106,10 +107,12 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
 
   if (state.sightLines && state.sightLines.length > 0) {
     ctx.save();
-    ctx.strokeStyle = "rgba(255, 216, 58, 0.4)";
-    ctx.lineWidth = Math.max(1, Math.floor(cell * 0.06));
+    ctx.lineWidth = Math.max(1, Math.floor(cell * 0.08));
     ctx.lineCap = "round";
     for (const line of state.sightLines) {
+      ctx.strokeStyle = line.hasCover
+        ? "rgba(255, 154, 31, 0.55)"
+        : "rgba(255, 216, 58, 0.55)";
       ctx.beginPath();
       ctx.moveTo(line.fromX * cell + cell / 2, line.fromY * cell + cell / 2);
       ctx.lineTo(line.toX * cell + cell / 2, line.toY * cell + cell / 2);
@@ -200,46 +203,67 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
+    const thickness = Math.max(3, Math.floor(cell * 0.1));
+    const halfInset = Math.max(2, Math.floor(cell * 0.18));
+    const edgeOffset = Math.max(1, Math.floor(cell * 0.04));
+    const hatchSpacing = Math.max(3, Math.floor(cell * 0.18));
     for (const ind of state.coverIndicators) {
       const px = ind.x * cell;
       const py = ind.y * cell;
       const isWall = ind.kind === "wall";
-      const color = isWall ? "#9bdcff" : "#f5c542";
-      const thickness = isWall
-        ? Math.max(3, Math.floor(cell * 0.1))
-        : Math.max(2, Math.floor(cell * 0.05));
-      const cornerInset = Math.max(2, Math.floor(cell * 0.18));
-      const edgeOffset = Math.max(1, Math.floor(cell * 0.04));
-      ctx.fillStyle = color;
+      const fillColor = isWall ? "#9bdcff" : "#ff9a1f";
+      const inset = isWall ? 0 : halfInset;
+
+      let bx = 0;
+      let by = 0;
+      let bw = 0;
+      let bh = 0;
       if (ind.side === "n") {
-        ctx.fillRect(
-          px + cornerInset,
-          py + edgeOffset,
-          cell - cornerInset * 2,
-          thickness,
-        );
+        bx = px + inset;
+        by = py + edgeOffset;
+        bw = cell - inset * 2;
+        bh = thickness;
       } else if (ind.side === "s") {
-        ctx.fillRect(
-          px + cornerInset,
-          py + cell - edgeOffset - thickness,
-          cell - cornerInset * 2,
-          thickness,
-        );
+        bx = px + inset;
+        by = py + cell - edgeOffset - thickness;
+        bw = cell - inset * 2;
+        bh = thickness;
       } else if (ind.side === "w") {
-        ctx.fillRect(
-          px + edgeOffset,
-          py + cornerInset,
-          thickness,
-          cell - cornerInset * 2,
-        );
-      } else if (ind.side === "e") {
-        ctx.fillRect(
-          px + cell - edgeOffset - thickness,
-          py + cornerInset,
-          thickness,
-          cell - cornerInset * 2,
-        );
+        bx = px + edgeOffset;
+        by = py + inset;
+        bw = thickness;
+        bh = cell - inset * 2;
+      } else {
+        bx = px + cell - edgeOffset - thickness;
+        by = py + inset;
+        bw = thickness;
+        bh = cell - inset * 2;
       }
+
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(bx, by, bw, bh);
+
+      if (isWall) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx, by, bw, bh);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(26, 51, 64, 0.55)";
+        ctx.lineWidth = 1;
+        const start = -bh;
+        const end = bw + bh;
+        for (let d = start; d <= end; d += hatchSpacing) {
+          ctx.beginPath();
+          ctx.moveTo(bx + d, by);
+          ctx.lineTo(bx + d - bh, by + bh);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      ctx.strokeStyle = "rgba(20, 20, 20, 0.85)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
     }
   }
 
