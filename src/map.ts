@@ -19,8 +19,8 @@ export type GameMap = {
   units: Unit[];
 };
 
-export const MAP_W = 8;
-export const MAP_H = 8;
+export const MAP_W = 16;
+export const MAP_H = 16;
 export const UNIT_HP = 8;
 export const UNIT_AP = 4;
 

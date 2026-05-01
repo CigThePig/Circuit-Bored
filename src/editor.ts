@@ -104,6 +104,7 @@ export function startEditor(
   clearBtn.addEventListener("click", () => {
     if (!confirm("Clear the map?")) return;
     map = createEmptyMap();
+    resizeCanvasForMap(canvas, map);
     redraw();
   });
 
