@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#111111" />
+    <title>Circuit Bored</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #111;
+        color: #eee;
+        font-family: -apple-system, system-ui, sans-serif;
+        overscroll-behavior: none;
+        touch-action: manipulation;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #app {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        max-width: 480px;
+        margin: 0 auto;
+        min-height: 100vh;
+      }
+      #topbar {
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        align-items: center;
+        background: #1a1a1a;
+        border-bottom: 1px solid #333;
+        flex-wrap: wrap;
+      }
+      #topbar .mode {
+        font-weight: bold;
+        flex: 1;
+      }
+      #canvas-wrap {
+        position: relative;
+        width: 100%;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #222;
+        touch-action: none;
+      }
+      #hud {
+        padding: 8px;
+        background: #1a1a1a;
+        border-top: 1px solid #333;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      button {
+        background: #2a2a2a;
+        color: #eee;
+        border: 1px solid #444;
+        padding: 8px 12px;
+        font-size: 14px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:active { background: #3a3a3a; }
+      button.active { background: #4a6; border-color: #6c8; color: #000; }
+      button.primary { background: #46a; border-color: #68c; color: #fff; }
+      button.danger { background: #a33; border-color: #c55; color: #fff; }
+      .status { font-size: 13px; color: #bbb; }
+      .overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        color: #fff;
+      }
+      .overlay h2 { margin: 0; font-size: 32px; }
+      .turn-banner {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 36px;
+        font-weight: bold;
+        letter-spacing: 0.15em;
+        color: #fff;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+        background: rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+        opacity: 1;
+        transition: opacity 0.5s ease-out;
+      }
+      .turn-banner.fade { opacity: 0; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="topbar">
+        <div class="mode" id="mode-label">Editor</div>
+        <button id="mode-toggle">Play</button>
+      </div>
+      <div id="canvas-wrap">
+        <canvas id="canvas" width="384" height="384"></canvas>
+        <div id="overlay" class="overlay hidden">
+          <h2 id="overlay-text">VICTORY</h2>
+          <button id="overlay-button" class="primary">Back to Editor</button>
+        </div>
+        <div id="turn-banner" class="turn-banner hidden"></div>
+      </div>
+      <div id="hud"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
