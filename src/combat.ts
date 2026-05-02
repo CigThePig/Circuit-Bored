@@ -109,6 +109,8 @@ export function hasShotLineOfSight(
  * Returns the hit-chance penalty from cover the target gets vs this shooter.
  * Picks the dominant-axis adjacent tile on the side facing the shooter; walls
  * give COVER_PENALTY, half_cover gives HALF_COVER_PENALTY. Penalties don't stack.
+ * If direct LoS is blocked (the shot is going around a corner), wall cover is
+ * always applied — a wall must be obstructing the line for the peek to be needed.
  */
 export function targetCoverPenalty(
   map: GameMap,
@@ -131,6 +133,12 @@ export function targetCoverPenalty(
     const t = getTile(map, c.x, c.y);
     if (t === "wall" && COVER_PENALTY > best) best = COVER_PENALTY;
     else if (t === "half_cover" && HALF_COVER_PENALTY > best) best = HALF_COVER_PENALTY;
+  }
+  if (
+    best < COVER_PENALTY &&
+    !hasLineOfSight(map, shooter.x, shooter.y, target.x, target.y)
+  ) {
+    best = COVER_PENALTY;
   }
   return best;
 }
