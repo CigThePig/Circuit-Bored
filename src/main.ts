@@ -59,7 +59,9 @@ modeToggle.addEventListener("click", () => {
 
 window.addEventListener("resize", () => {
   if (mode === "editor") {
-    editor?.redraw();
+    editor?.resize();
+  } else {
+    runtime?.resize();
   }
 });
 
