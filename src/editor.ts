@@ -1,15 +1,20 @@
 import {
   createEmptyMap,
-  loadMap,
+  loadMapWithReport,
   makeUnit,
   saveMap,
   setTile,
   unitAt,
-  validatePlayable,
   type GameMap,
 } from "./map.ts";
 import { attachTapHandler } from "./input.ts";
 import { draw, resizeCanvasForMap, type RenderState } from "./render.ts";
+import {
+  canRunMap,
+  logReport,
+  summarizeReport,
+  validateMap,
+} from "./validation.ts";
 
 type Tool = "floor" | "wall" | "half_cover" | "player" | "enemy";
 
@@ -17,6 +22,7 @@ export type EditorHandle = {
   getMap: () => GameMap;
   destroy: () => void;
   redraw: () => void;
+  resize: () => void;
 };
 
 export function startEditor(
@@ -36,9 +42,27 @@ export function startEditor(
     floatingTexts: [],
   };
 
+  hud.innerHTML = "";
+  const status = document.createElement("div");
+  status.className = "status";
+  status.textContent = "Tap to paint. Tap a unit with its tool to remove it.";
+
+  const refreshValidationStatus = () => {
+    const report = validateMap(map);
+    const summary = summarizeReport(report);
+    if (summary) {
+      status.textContent = summary;
+      status.classList.toggle("validation-error", report.hasErrors);
+    } else {
+      status.classList.remove("validation-error");
+      status.textContent = "Tap to paint. Tap a unit with its tool to remove it.";
+    }
+  };
+
   const redraw = () => {
     state.map = map;
     draw(canvas, state);
+    refreshValidationStatus();
   };
 
   resizeCanvasForMap(canvas, map);
@@ -76,7 +100,6 @@ export function startEditor(
     redraw();
   });
 
-  hud.innerHTML = "";
   const toolRow = document.createElement("div");
   toolRow.className = "row";
   const tools: { key: Tool; label: string }[] = [
@@ -125,14 +148,21 @@ export function startEditor(
   const loadBtn = document.createElement("button");
   loadBtn.textContent = "Load";
   loadBtn.addEventListener("click", () => {
-    const loaded = loadMap();
-    if (!loaded) {
-      status.textContent = "No saved map.";
+    const result = loadMapWithReport();
+    if (!result.map) {
+      logReport("editor load", result.report);
+      status.textContent =
+        result.report.issues.length > 0
+          ? summarizeReport(result.report) ?? "No saved map."
+          : "No saved map.";
       return;
     }
-    map = loaded;
+    map = result.map;
     resizeCanvasForMap(canvas, map);
     redraw();
+    if (result.report.issues.length > 0) {
+      logReport("editor load", result.report);
+    }
     status.textContent = "Loaded.";
   });
 
@@ -140,9 +170,13 @@ export function startEditor(
   playBtn.textContent = "Play";
   playBtn.className = "primary";
   playBtn.addEventListener("click", () => {
-    const err = validatePlayable(map);
-    if (err) {
-      status.textContent = err;
+    const report = validateMap(map);
+    if (report.issues.length > 0) {
+      logReport("editor play check", report);
+    }
+    const runnable = canRunMap(map);
+    if (!runnable.ok) {
+      status.textContent = runnable.reason ?? "Map cannot be run.";
       return;
     }
     onPlay(map);
@@ -154,12 +188,14 @@ export function startEditor(
   buttonRow.appendChild(playBtn);
   hud.appendChild(buttonRow);
 
-  const status = document.createElement("div");
-  status.className = "status";
-  status.textContent = "Tap to paint. Tap a unit with its tool to remove it.";
   hud.appendChild(status);
 
   redraw();
+
+  const resize = () => {
+    resizeCanvasForMap(canvas, map);
+    redraw();
+  };
 
   return {
     getMap: () => map,
@@ -168,5 +204,6 @@ export function startEditor(
       hud.innerHTML = "";
     },
     redraw,
+    resize,
   };
 }

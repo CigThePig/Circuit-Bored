@@ -1,5 +1,5 @@
 import type { GameMap, Unit } from "./map.ts";
-import { getTile, inBounds } from "./map.ts";
+import { getTile, inBounds, unitAt } from "./map.ts";
 
 export const BASE_HIT = 0.85;
 export const COVER_PENALTY = 0.4;
@@ -52,6 +52,154 @@ export function hasLineOfSight(
     if (getTile(map, p.x, p.y) === "wall") return false;
   }
   return true;
+}
+
+/**
+ * Returns the tiles traversed by a strict line from (ax,ay) to (bx,by),
+ * including the start and end points. Tiles are listed in order.
+ */
+export function getLineTilesStrict(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { x: number; y: number }[] {
+  const points: { x: number; y: number }[] = [];
+  const dx = Math.abs(bx - ax);
+  const dy = -Math.abs(by - ay);
+  const sx = ax < bx ? 1 : -1;
+  const sy = ay < by ? 1 : -1;
+  let err = dx + dy;
+  let x = ax;
+  let y = ay;
+  points.push({ x, y });
+  while (x !== bx || y !== by) {
+    const e2 = 2 * err;
+    if (e2 >= dy && e2 <= dx) {
+      err += dy;
+      x += sx;
+      err += dx;
+      y += sy;
+    } else if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    } else {
+      err += dx;
+      y += sy;
+    }
+    points.push({ x, y });
+  }
+  return points;
+}
+
+/**
+ * Strict line-of-sight: walks a supercover line from (ax,ay) to (bx,by).
+ * Walls block; out-of-bounds blocks; half-cover does not block.
+ * On a diagonal step, BOTH off-diagonal corner tiles are checked - if
+ * EITHER is a wall, vision is blocked. (S W / . T case is blocked.)
+ * Endpoints themselves never block.
+ */
+export function hasStrictLineOfSight(
+  map: GameMap,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): boolean {
+  if (!inBounds(map, ax, ay) || !inBounds(map, bx, by)) return false;
+  if (ax === bx && ay === by) return true;
+  const dx = Math.abs(bx - ax);
+  const dy = -Math.abs(by - ay);
+  const sx = ax < bx ? 1 : -1;
+  const sy = ay < by ? 1 : -1;
+  let err = dx + dy;
+  let x = ax;
+  let y = ay;
+  while (x !== bx || y !== by) {
+    const e2 = 2 * err;
+    if (e2 >= dy && e2 <= dx) {
+      // Diagonal step: the line crosses the shared corner of four tiles.
+      // Strict policy: any wall at either off-diagonal corner blocks.
+      const cx1 = x + sx;
+      const cy1 = y;
+      const cx2 = x;
+      const cy2 = y + sy;
+      const cornerBlocks =
+        !inBounds(map, cx1, cy1) ||
+        !inBounds(map, cx2, cy2) ||
+        getTile(map, cx1, cy1) === "wall" ||
+        getTile(map, cx2, cy2) === "wall";
+      if (cornerBlocks) return false;
+      err += dy;
+      x += sx;
+      err += dx;
+      y += sy;
+    } else if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    } else {
+      err += dx;
+      y += sy;
+    }
+    if (x === bx && y === by) break;
+    if (!inBounds(map, x, y)) return false;
+    if (getTile(map, x, y) === "wall") return false;
+  }
+  return true;
+}
+
+/**
+ * Returns the first 1-2 wall (or out-of-bounds) tiles that block strict LoS,
+ * in path order. Empty if the line is unblocked.
+ */
+export function firstBlockingTilesStrict(
+  map: GameMap,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { x: number; y: number }[] {
+  if (!inBounds(map, ax, ay) || !inBounds(map, bx, by)) return [];
+  if (ax === bx && ay === by) return [];
+  const dx = Math.abs(bx - ax);
+  const dy = -Math.abs(by - ay);
+  const sx = ax < bx ? 1 : -1;
+  const sy = ay < by ? 1 : -1;
+  let err = dx + dy;
+  let x = ax;
+  let y = ay;
+  while (x !== bx || y !== by) {
+    const e2 = 2 * err;
+    if (e2 >= dy && e2 <= dx) {
+      const cx1 = x + sx;
+      const cy1 = y;
+      const cx2 = x;
+      const cy2 = y + sy;
+      const blockers: { x: number; y: number }[] = [];
+      if (!inBounds(map, cx1, cy1) || getTile(map, cx1, cy1) === "wall") {
+        blockers.push({ x: cx1, y: cy1 });
+      }
+      if (!inBounds(map, cx2, cy2) || getTile(map, cx2, cy2) === "wall") {
+        blockers.push({ x: cx2, y: cy2 });
+      }
+      if (blockers.length > 0) return blockers;
+      err += dy;
+      x += sx;
+      err += dx;
+      y += sy;
+    } else if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    } else {
+      err += dx;
+      y += sy;
+    }
+    if (x === bx && y === by) break;
+    if (!inBounds(map, x, y) || getTile(map, x, y) === "wall") {
+      return [{ x, y }];
+    }
+  }
+  return [];
 }
 
 type PeekPosition = {
@@ -147,6 +295,66 @@ function getPeekPositionsToward(
   return peeks;
 }
 
+export type ShotLineMode = "direct" | "peek" | "blocked";
+
+export type ShotLineResult = {
+  canShoot: boolean;
+  mode: ShotLineMode;
+  from: { x: number; y: number };
+  peekFrom?: { x: number; y: number };
+  blockingTiles?: { x: number; y: number }[];
+};
+
+/**
+ * Decides whether `shooter` can shoot `target` and from where.
+ * 1) If shooter has direct strict LoS, returns mode "direct".
+ * 2) Else iterates peek positions toward the target. A peek tile is valid
+ *    only when in-bounds, not a wall/half_cover, not occupied by another
+ *    living unit, and has strict LoS to the target.
+ * 3) Otherwise returns mode "blocked".
+ */
+export function canShootTarget(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+): ShotLineResult {
+  const sx = shooter.x;
+  const sy = shooter.y;
+  const tx = target.x;
+  const ty = target.y;
+
+  if (hasStrictLineOfSight(map, sx, sy, tx, ty)) {
+    return { canShoot: true, mode: "direct", from: { x: sx, y: sy } };
+  }
+
+  for (const peek of getPeekPositionsToward(map, sx, sy, tx, ty)) {
+    if (!inBounds(map, peek.x, peek.y)) continue;
+    const t = getTile(map, peek.x, peek.y);
+    if (t === "wall" || t === "half_cover") continue;
+    const occupant = unitAt(map, peek.x, peek.y);
+    if (occupant && occupant.id !== shooter.id) continue;
+    if (!hasStrictLineOfSight(map, peek.x, peek.y, tx, ty)) continue;
+    return {
+      canShoot: true,
+      mode: "peek",
+      from: { x: peek.x, y: peek.y },
+      peekFrom: { x: peek.x, y: peek.y },
+    };
+  }
+
+  const blockers = firstBlockingTilesStrict(map, sx, sy, tx, ty);
+  return {
+    canShoot: false,
+    mode: "blocked",
+    from: { x: sx, y: sy },
+    blockingTiles: blockers,
+  };
+}
+
+/**
+ * Back-compat wrapper around canShootTarget for callers that only need a
+ * yes/no. Builds throwaway Unit-shaped points for the LoS computation.
+ */
 export function hasShotLineOfSight(
   map: GameMap,
   sx: number,
@@ -154,22 +362,47 @@ export function hasShotLineOfSight(
   tx: number,
   ty: number,
 ): boolean {
-  if (hasLineOfSight(map, sx, sy, tx, ty)) return true;
-
-  // Only the shooter gets alternate peek origins.
-  // The target should not donate fake peek tiles, because combining shooter
-  // and target peeks can create impossible through-wall shots.
-  for (const s of getPeekPositionsToward(map, sx, sy, tx, ty)) {
-    if (hasLineOfSight(map, s.x, s.y, tx, ty)) return true;
+  if (hasStrictLineOfSight(map, sx, sy, tx, ty)) return true;
+  for (const peek of getPeekPositionsToward(map, sx, sy, tx, ty)) {
+    if (!inBounds(map, peek.x, peek.y)) continue;
+    const t = getTile(map, peek.x, peek.y);
+    if (t === "wall" || t === "half_cover") continue;
+    const occupant = unitAt(map, peek.x, peek.y);
+    if (occupant && (occupant.x !== sx || occupant.y !== sy)) continue;
+    if (hasStrictLineOfSight(map, peek.x, peek.y, tx, ty)) return true;
   }
-
   return false;
 }
 
 /**
+ * Overwatch reaction predicate: was the mover hidden at `from` and visible
+ * at `to` from the watcher's perspective using strict LoS / peek rules?
+ */
+export function overwatchShouldFire(
+  map: GameMap,
+  watcher: Unit,
+  mover: Unit,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): boolean {
+  if (!watcher.overwatch) return false;
+  if (watcher.hp <= 0) return false;
+  const moverFrom: Unit = { ...mover, x: from.x, y: from.y };
+  const moverTo: Unit = { ...mover, x: to.x, y: to.y };
+  const sawBefore = canShootTarget(map, watcher, moverFrom).canShoot;
+  const seesNow = canShootTarget(map, watcher, moverTo).canShoot;
+  return !sawBefore && seesNow;
+}
+
+/**
  * Returns the hit-chance penalty from cover the target gets vs this shooter.
- * Picks the dominant-axis adjacent tile on the side facing the shooter; walls
- * give COVER_PENALTY, half_cover gives HALF_COVER_PENALTY. Penalties don't stack.
+ * Picks the adjacent tile facing the shooter on each axis where the shooter
+ * actually approaches from; walls give COVER_PENALTY, half_cover gives
+ * HALF_COVER_PENALTY. Penalties don't stack.
+ *
+ * Flank rule: on a true diagonal approach (|dx|===|dy|), the target only gets
+ * cover when BOTH axis tiles are covered. Otherwise the shooter is considered
+ * to be flanking the cover and the penalty is 0.
  */
 export function targetCoverPenalty(
   map: GameMap,
@@ -180,20 +413,26 @@ export function targetCoverPenalty(
   const dy = shooter.y - target.y;
   if (dx === 0 && dy === 0) return 0;
 
-  const candidates: { x: number; y: number }[] = [];
-  if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) {
-    candidates.push({ x: target.x + Math.sign(dx), y: target.y });
+  const xCover = dx !== 0 ? getTile(map, target.x + Math.sign(dx), target.y) : null;
+  const yCover = dy !== 0 ? getTile(map, target.x, target.y + Math.sign(dy)) : null;
+  const xCovers = xCover === "wall" || xCover === "half_cover";
+  const yCovers = yCover === "wall" || yCover === "half_cover";
+
+  const tileToPenalty = (t: typeof xCover): number => {
+    if (t === "wall") return COVER_PENALTY;
+    if (t === "half_cover") return HALF_COVER_PENALTY;
+    return 0;
+  };
+
+  if (Math.abs(dx) === Math.abs(dy)) {
+    // True diagonal: cover only counts if both axis tiles cover.
+    if (!xCovers || !yCovers) return 0;
+    return Math.max(tileToPenalty(xCover), tileToPenalty(yCover));
   }
-  if (Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
-    candidates.push({ x: target.x, y: target.y + Math.sign(dy) });
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return tileToPenalty(xCover);
   }
-  let best = 0;
-  for (const c of candidates) {
-    const t = getTile(map, c.x, c.y);
-    if (t === "wall" && COVER_PENALTY > best) best = COVER_PENALTY;
-    else if (t === "half_cover" && HALF_COVER_PENALTY > best) best = HALF_COVER_PENALTY;
-  }
-  return best;
+  return tileToPenalty(yCover);
 }
 
 export function targetHasCover(
@@ -205,20 +444,20 @@ export function targetHasCover(
 }
 
 /**
- * Effective hit-chance penalty for a shot, including the around-the-corner
- * bonus when the shooter has no direct LoS and must lean past a wall. The
- * peek bonus only applies when the target genuinely has cover from this
- * shooter, so adjacent enemies and same-side-of-wall shots stay unprotected.
+ * Effective hit-chance penalty for a shot. Uses canShootTarget for the
+ * geometry: if blocked, returns Infinity (caller should clamp via resolveShot).
+ * If shooting from a peek, adds PEEK_PENALTY only when the target has cover.
  */
 export function shotHitPenalty(
   map: GameMap,
   shooter: Unit,
   target: Unit,
 ): number {
+  const shot = canShootTarget(map, shooter, target);
+  if (!shot.canShoot) return Infinity;
   const cover = targetCoverPenalty(map, shooter, target);
   if (cover === 0) return 0;
-  const direct = hasLineOfSight(map, shooter.x, shooter.y, target.x, target.y);
-  return direct ? cover : cover + PEEK_PENALTY;
+  return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
 }
 
 export type ShotResult = {

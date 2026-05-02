@@ -15,17 +15,22 @@ import {
 } from "./render.ts";
 import {
   BASE_HIT,
+  canShootTarget,
   hasShotLineOfSight,
+  overwatchShouldFire,
   resolveShot,
   shotHitPenalty,
 } from "./combat.ts";
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
+import { createAiSession } from "./aiSession.ts";
+import { logReport, validateMap } from "./validation.ts";
 
 type Turn = "player" | "enemy";
 type Outcome = "victory" | "defeat" | null;
 
 export type RuntimeHandle = {
   destroy: () => void;
+  resize: () => void;
 };
 
 export function startRuntime(
@@ -44,6 +49,12 @@ export function startRuntime(
     u.ap = u.maxAp;
     u.overwatch = false;
   }
+
+  const startupReport = validateMap(map);
+  logReport("runtime startup", startupReport);
+
+  const lifecycle = { cancelled: false };
+  const aiSession = createAiSession();
 
   let selected: Unit | null = null;
   let turn: Turn = "player";
@@ -287,7 +298,7 @@ export function startRuntime(
 
     if (tappedUnit && tappedUnit.team === "enemy") {
       if (selected.ap < 2) return;
-      if (!hasShotLineOfSight(map, selected.x, selected.y, tappedUnit.x, tappedUnit.y)) {
+      if (!canShootTarget(map, selected, tappedUnit).canShoot) {
         return;
       }
       selected.ap -= 2;
@@ -315,24 +326,14 @@ export function startRuntime(
     }
   });
 
-  const enemySeesAnyPlayer = (enemy: Unit): boolean => {
-    for (const p of map.units) {
-      if (p.team !== "player" || p.hp <= 0) continue;
-      if (hasShotLineOfSight(map, enemy.x, enemy.y, p.x, p.y)) return true;
-    }
-    return false;
-  };
-
   const triggerOverwatchReactions = async (
     enemy: Unit,
     from: { x: number; y: number },
     to: { x: number; y: number },
   ) => {
     for (const p of map.units) {
-      if (p.team !== "player" || p.hp <= 0 || !p.overwatch) continue;
-      const sawBefore = hasShotLineOfSight(map, p.x, p.y, from.x, from.y);
-      const seesNow = hasShotLineOfSight(map, p.x, p.y, to.x, to.y);
-      if (sawBefore || !seesNow) continue;
+      if (p.team !== "player" || p.hp <= 0) continue;
+      if (!overwatchShouldFire(map, p, enemy, from, to)) continue;
       const result = resolveShot(map, p, enemy);
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, enemy.x, enemy.y, "#ffd83a");
@@ -343,6 +344,7 @@ export function startRuntime(
       redraw();
       checkOutcome();
       await delay(350);
+      if (lifecycle.cancelled) return;
       break;
     }
   };
@@ -350,18 +352,15 @@ export function startRuntime(
   const animateEnemyTurn = async () => {
     busy = true;
     updateHud();
-    const canShootThisTurn = new Map<string, boolean>();
-    for (const enemy of map.units) {
-      if (enemy.team !== "enemy" || enemy.hp <= 0) continue;
-      canShootThisTurn.set(enemy.id, enemySeesAnyPlayer(enemy));
-    }
     await delay(500);
+    if (lifecycle.cancelled) return;
     const enemies = map.units.filter((u) => u.team === "enemy" && u.hp > 0);
     for (const enemy of enemies) {
-      beginEnemyTurn(map, enemy);
+      if (lifecycle.cancelled) return;
+      beginEnemyTurn(map, enemy, aiSession);
       while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
-        const canShoot = canShootThisTurn.get(enemy.id) ?? false;
-        const action = takeEnemyAction(map, enemy, canShoot);
+        if (lifecycle.cancelled) return;
+        const action = takeEnemyAction(map, enemy, aiSession);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
           if (action.result.hit) {
@@ -373,15 +372,19 @@ export function startRuntime(
           checkOutcome();
           if (outcome !== null) break;
           await delay(350);
+          if (lifecycle.cancelled) return;
         } else if (action.kind === "move") {
           redraw();
           await delay(350);
+          if (lifecycle.cancelled) return;
           await triggerOverwatchReactions(enemy, action.from, action.to);
+          if (lifecycle.cancelled) return;
           if (outcome !== null) break;
         }
       }
       if (outcome !== null) break;
     }
+    if (lifecycle.cancelled) return;
     if (outcome === null) {
       turn = "player";
       for (const u of map.units) {
@@ -449,8 +452,14 @@ export function startRuntime(
   showTurnBanner("player");
   redraw();
 
+  const resize = () => {
+    resizeCanvasForMap(canvas, map);
+    redraw();
+  };
+
   return {
     destroy: () => {
+      lifecycle.cancelled = true;
       detachTap();
       cancelAnimationFrame(rafId);
       clearTimeout(bannerFadeTimer);
@@ -462,6 +471,7 @@ export function startRuntime(
       overlay.classList.remove("victory", "defeat");
       overlayButton.onclick = null;
     },
+    resize,
   };
 }
 
