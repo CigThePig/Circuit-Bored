@@ -10,6 +10,7 @@ const overlayButton = document.getElementById("overlay-button") as HTMLButtonEle
 const turnBanner = document.getElementById("turn-banner") as HTMLElement;
 const modeLabel = document.getElementById("mode-label") as HTMLElement;
 const modeToggle = document.getElementById("mode-toggle") as HTMLButtonElement;
+const screenshotButton = document.getElementById("screenshot") as HTMLButtonElement;
 
 type Mode = "editor" | "runtime";
 let mode: Mode = "editor";
@@ -40,6 +41,21 @@ const enterRuntime = (map: GameMap) => {
     enterEditor(lastEditorMap);
   });
 };
+
+screenshotButton.addEventListener("click", () => {
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `circuit-bored-${mode}-${ts}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, "image/png");
+});
 
 modeToggle.addEventListener("click", () => {
   if (mode === "editor") {
