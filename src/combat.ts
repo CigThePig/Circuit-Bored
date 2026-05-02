@@ -54,36 +54,96 @@ export function hasLineOfSight(
   return true;
 }
 
+type PeekPosition = {
+  x: number;
+  y: number;
+  wallX: number;
+  wallY: number;
+  wallDx: number;
+  wallDy: number;
+  sideDx: number;
+  sideDy: number;
+};
+
+function isWall(map: GameMap, x: number, y: number): boolean {
+  return getTile(map, x, y) === "wall";
+}
+
+function isOpenForPeek(map: GameMap, x: number, y: number): boolean {
+  return inBounds(map, x, y) && !isWall(map, x, y);
+}
+
 export function getPeekPositions(
   map: GameMap,
   x: number,
   y: number,
 ): { x: number; y: number }[] {
-  const peeks: { x: number; y: number }[] = [];
+  return getPeekPositionsToward(map, x, y, null, null)
+    .map((p) => ({ x: p.x, y: p.y }));
+}
+
+function getPeekPositionsToward(
+  map: GameMap,
+  x: number,
+  y: number,
+  targetX: number | null,
+  targetY: number | null,
+): PeekPosition[] {
+  const peeks: PeekPosition[] = [];
   const dirs = [
     { dx: 1, dy: 0 },
     { dx: -1, dy: 0 },
     { dx: 0, dy: 1 },
     { dx: 0, dy: -1 },
   ];
+
   for (const d of dirs) {
     const wx = x + d.dx;
     const wy = y + d.dy;
-    if (getTile(map, wx, wy) !== "wall") continue;
+    if (!isWall(map, wx, wy)) continue;
+
+    // The target must be on the far side of this adjacent wall.
+    // Otherwise this wall is not the cover being peeked around.
+    if (targetX !== null && targetY !== null) {
+      const targetPastWall = (targetX - x) * d.dx + (targetY - y) * d.dy;
+      if (targetPastWall <= 0) continue;
+    }
+
     const perps = d.dx !== 0
       ? [{ px: 0, py: 1 }, { px: 0, py: -1 }]
       : [{ px: 1, py: 0 }, { px: -1, py: 0 }];
+
     for (const p of perps) {
       const lx = x + p.px;
       const ly = y + p.py;
       const cx = wx + p.px;
       const cy = wy + p.py;
-      if (!inBounds(map, lx, ly) || !inBounds(map, cx, cy)) continue;
-      if (getTile(map, lx, ly) === "wall") continue;
-      if (getTile(map, cx, cy) === "wall") continue;
-      peeks.push({ x: cx, y: cy });
+
+      // The unit needs open shoulder space and an open corner square.
+      // A wall on either tile blocks the lean.
+      if (!isOpenForPeek(map, lx, ly)) continue;
+      if (!isOpenForPeek(map, cx, cy)) continue;
+
+      // The peek side must face the target.
+      // This stops corner units from peeking both sides for one shot.
+      if (targetX !== null && targetY !== null) {
+        const targetOnPeekSide = (targetX - x) * p.px + (targetY - y) * p.py;
+        if (targetOnPeekSide <= 0) continue;
+      }
+
+      peeks.push({
+        x: cx,
+        y: cy,
+        wallX: wx,
+        wallY: wy,
+        wallDx: d.dx,
+        wallDy: d.dy,
+        sideDx: p.px,
+        sideDy: p.py,
+      });
     }
   }
+
   return peeks;
 }
 
@@ -95,14 +155,14 @@ export function hasShotLineOfSight(
   ty: number,
 ): boolean {
   if (hasLineOfSight(map, sx, sy, tx, ty)) return true;
-  const sources = [{ x: sx, y: sy }, ...getPeekPositions(map, sx, sy)];
-  const targets = [{ x: tx, y: ty }, ...getPeekPositions(map, tx, ty)];
-  for (const s of sources) {
-    for (const t of targets) {
-      if (s.x === sx && s.y === sy && t.x === tx && t.y === ty) continue;
-      if (hasLineOfSight(map, s.x, s.y, t.x, t.y)) return true;
-    }
+
+  // Only the shooter gets alternate peek origins.
+  // The target should not donate fake peek tiles, because combining shooter
+  // and target peeks can create impossible through-wall shots.
+  for (const s of getPeekPositionsToward(map, sx, sy, tx, ty)) {
+    if (hasLineOfSight(map, s.x, s.y, tx, ty)) return true;
   }
+
   return false;
 }
 
