@@ -144,6 +144,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   const map = state.map;
   const cssW = parseFloat(canvas.style.width || `${canvas.width}`);
   const cell = cssW / map.width;
+  const mapHeightPx = cell * map.height;
   const now = performance.now();
 
   ctx.fillStyle = PALETTE.BG;
@@ -178,7 +179,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
     if (u.hp <= 0) continue;
     const g: Geom = { px: u.x * cell, py: u.y * cell, cell };
     const isSelected = state.selected !== null && state.selected.id === u.id;
-    drawUnit(ctx, g, u, isSelected);
+    drawUnit(ctx, g, u, isSelected, mapHeightPx);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
@@ -196,7 +197,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
 
   for (const p of state.enemyPreviews) {
     const g: Geom = { px: p.x * cell, py: p.y * cell, cell };
-    drawEnemyPreview(ctx, g, p);
+    drawEnemyPreview(ctx, g, p, mapHeightPx);
   }
 
   for (const t of state.floatingTexts) {
@@ -473,6 +474,7 @@ function drawUnit(
   g: Geom,
   u: Unit,
   isSelected: boolean,
+  mapHeightPx: number,
 ): void {
   const { px, py, cell } = g;
   const pad = Math.max(2, Math.floor(cell * 0.12));
@@ -615,7 +617,7 @@ function drawUnit(
   }
 
   drawHpChip(ctx, g, u);
-  drawApPips(ctx, g, u);
+  drawApPips(ctx, g, u, mapHeightPx);
 }
 
 function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
@@ -623,14 +625,15 @@ function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
   const fontSize = Math.max(8, Math.floor(cell * 0.30));
   const text = `${u.hp}`;
   ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
-  ctx.textAlign = "right";
+  ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const textW = ctx.measureText(text).width;
   const padX = 3;
   const chipW = textW + padX * 2;
   const chipH = fontSize + 2;
-  const chipX = px + cell - chipW - 2;
-  const chipY = py + 1;
+  const chipX = px + cell / 2 - chipW / 2;
+  const aboveY = py - chipH - 1;
+  const chipY = aboveY >= 0 ? aboveY : py + 1;
 
   roundRect(ctx, chipX, chipY, chipW, chipH, 2);
   ctx.fillStyle = PALETTE.HP_CHIP_BG;
@@ -640,10 +643,15 @@ function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
   ctx.stroke();
 
   ctx.fillStyle = PALETTE.HP_TEXT;
-  ctx.fillText(text, chipX + chipW - padX, chipY + 1);
+  ctx.fillText(text, chipX + chipW / 2, chipY + 1);
 }
 
-function drawApPips(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
+function drawApPips(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  u: Unit,
+  mapHeightPx: number,
+): void {
   const { px, py, cell } = g;
   const pipCount = u.maxAp;
   if (pipCount <= 0) return;
@@ -652,7 +660,8 @@ function drawApPips(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
   const gap = Math.max(1, pipR * 1.1);
   const totalW = pipCount * pipR * 2 + (pipCount - 1) * gap;
   const startX = cx - totalW / 2 + pipR;
-  const pipY = py + cell - pipR - 2;
+  const belowY = py + cell + pipR + 1;
+  const pipY = belowY + pipR <= mapHeightPx ? belowY : py + cell - pipR - 2;
   const fillColor = u.team === "player" ? PALETTE.PIP_PLAYER_FILL : PALETTE.PIP_ENEMY_FILL;
   for (let i = 0; i < pipCount; i++) {
     const pcx = startX + i * (pipR * 2 + gap);
@@ -831,6 +840,7 @@ function drawEnemyPreview(
   ctx: CanvasRenderingContext2D,
   g: Geom,
   p: EnemyPreview,
+  mapHeightPx: number,
 ): void {
   const { px, py, cell } = g;
   const text = `${p.hitPct}%`;
@@ -843,7 +853,18 @@ function drawEnemyPreview(
   const pillH = fontSize + 4;
   const pillW = textW + padX * 2;
   const pillX = px + cell / 2 - pillW / 2;
-  const pillY = py + 2;
+  const hpFontSize = Math.max(8, Math.floor(cell * 0.30));
+  const hpChipH = hpFontSize + 2;
+  const stackedY = py - hpChipH - pillH - 3;
+  const belowY = py + cell + 2;
+  let pillY: number;
+  if (stackedY >= 0) {
+    pillY = stackedY;
+  } else if (belowY + pillH <= mapHeightPx) {
+    pillY = belowY;
+  } else {
+    pillY = py + 2;
+  }
 
   roundRect(ctx, pillX, pillY, pillW, pillH, 3);
   ctx.fillStyle = PALETTE.PREVIEW_BG;
@@ -858,7 +879,14 @@ function drawEnemyPreview(
 
   if (p.hasCover) {
     const shieldH = Math.max(8, Math.floor(cell * 0.30));
-    drawShieldIcon(ctx, px + 3, py + 3, shieldH, PALETTE.PREVIEW_SHIELD, PALETTE.PREVIEW_SHIELD_OUTLINE);
+    drawShieldIcon(
+      ctx,
+      px + 3,
+      py + cell - shieldH - 3,
+      shieldH,
+      PALETTE.PREVIEW_SHIELD,
+      PALETTE.PREVIEW_SHIELD_OUTLINE,
+    );
   }
 }
 
