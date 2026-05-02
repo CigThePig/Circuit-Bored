@@ -2,8 +2,9 @@ import type { GameMap, Unit } from "./map.ts";
 import { getTile, inBounds } from "./map.ts";
 
 export const BASE_HIT = 0.85;
-export const COVER_PENALTY = 0.35;
+export const COVER_PENALTY = 0.4;
 export const HALF_COVER_PENALTY = 0.18;
+export const PEEK_PENALTY = 0.3;
 export const SHOT_DAMAGE = 3;
 
 export function bresenhamLine(
@@ -143,6 +144,23 @@ export function targetHasCover(
   return targetCoverPenalty(map, shooter, target) > 0;
 }
 
+/**
+ * Effective hit-chance penalty for a shot, including the around-the-corner
+ * bonus when the shooter has no direct LoS and must lean past a wall. The
+ * peek bonus only applies when the target genuinely has cover from this
+ * shooter, so adjacent enemies and same-side-of-wall shots stay unprotected.
+ */
+export function shotHitPenalty(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+): number {
+  const cover = targetCoverPenalty(map, shooter, target);
+  if (cover === 0) return 0;
+  const direct = hasLineOfSight(map, shooter.x, shooter.y, target.x, target.y);
+  return direct ? cover : cover + PEEK_PENALTY;
+}
+
 export type ShotResult = {
   hit: boolean;
   damage: number;
@@ -156,7 +174,7 @@ export function resolveShot(
   target: Unit,
   rng: () => number = Math.random,
 ): ShotResult {
-  const penalty = targetCoverPenalty(map, shooter, target);
+  const penalty = shotHitPenalty(map, shooter, target);
   const hadCover = penalty > 0;
   const hitChance = Math.max(0, BASE_HIT - penalty);
   const roll = rng();
