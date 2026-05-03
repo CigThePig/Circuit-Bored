@@ -1,4 +1,58 @@
-import type { GameMap, Unit } from "./map.ts";
+import { getTile, type GameMap, type Unit } from "./map.ts";
+
+export type UnitVisualState = {
+  spent?: boolean;
+  inCover?: boolean;
+  peekDir?: { x: number; y: number } | null;
+  aimingDir?: { x: number; y: number } | null;
+  nowMs?: number;
+};
+
+const PLAYER_POSE = {
+  idleBobSpeed: 3.2,
+  idleBobAmount: 0.015,
+  coverDrop: 0.055,
+  coverScaleY: 0.92,
+  peekOffset: 0.14,
+  handRadius: 0.055,
+  handReach: 0.24,
+  handVerticalReach: 0.12,
+  weaponLength: 0.18,
+} as const;
+
+function isAdjacentToCover(map: GameMap, x: number, y: number): boolean {
+  const dirs: [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  for (const [dx, dy] of dirs) {
+    const t = getTile(map, x + dx, y + dy);
+    if (t === "wall" || t === "half_cover") return true;
+  }
+  return false;
+}
+
+function computeUnitVisualState(
+  map: GameMap,
+  u: Unit,
+  nowMs: number,
+): UnitVisualState {
+  const spent = u.ap === 0;
+  const inCover = isAdjacentToCover(map, u.x, u.y);
+  let peekDir: { x: number; y: number } | null = null;
+  if (u.peekExposure) {
+    const dx = u.peekExposure.x - u.x;
+    const dy = u.peekExposure.y - u.y;
+    if (dx !== 0 || dy !== 0) {
+      peekDir = { x: Math.sign(dx), y: Math.sign(dy) };
+    }
+  }
+  // TODO: aimingDir would require tracking the unit's current shot target;
+  // for now we fall back to peek direction (or facing) inside the silhouette.
+  return { spent, inCover, peekDir, aimingDir: null, nowMs };
+}
 
 export type FloatingText = {
   text: string;
@@ -179,7 +233,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
     if (u.hp <= 0) continue;
     const g: Geom = { px: u.x * cell, py: u.y * cell, cell };
     const isSelected = state.selected !== null && state.selected.id === u.id;
-    drawUnit(ctx, g, u, isSelected, mapHeightPx);
+    drawUnit(ctx, g, u, isSelected, mapHeightPx, map, now);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
@@ -302,7 +356,7 @@ function drawUnitSilhouette(
   g: Geom,
   u: Unit,
   bodyColor: string,
-  spent: boolean,
+  visual: UnitVisualState,
 ): void {
   const { px, py, cell } = g;
   const cx = px + cell / 2;
@@ -315,13 +369,32 @@ function drawUnitSilhouette(
   const headColor = u.team === "player" ? PALETTE.PLAYER_HEAD : PALETTE.ENEMY_HEAD;
   const coreGlow = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
 
+  const spent = visual.spent ?? false;
+  const inCover = visual.inCover ?? false;
+  const peekDir = visual.peekDir ?? null;
+  const aimingDir = visual.aimingDir ?? null;
+  const nowMs = visual.nowMs ?? performance.now();
+
+  const tSec = nowMs / 1000;
+  const idleBob = Math.sin(tSec * PLAYER_POSE.idleBobSpeed) * cell * PLAYER_POSE.idleBobAmount;
+  const coverDrop = inCover ? cell * PLAYER_POSE.coverDrop : 0;
+  const coverScaleY = inCover ? PLAYER_POSE.coverScaleY : 1;
+  const peekOffsetX = (peekDir?.x ?? 0) * cell * PLAYER_POSE.peekOffset;
+  const peekOffsetY = (peekDir?.y ?? 0) * cell * PLAYER_POSE.peekOffset;
+
   ctx.save();
   ctx.translate(cx, cy);
 
+  // Anchored ground shadow stays put on the tile and never animates.
   ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
   ctx.beginPath();
   ctx.ellipse(0, cell * 0.24, cell * 0.30, cell * 0.11, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Animated body transform: idle bob + cover crouch + peek lean.
+  ctx.save();
+  ctx.translate(peekOffsetX, peekOffsetY + idleBob + coverDrop);
+  ctx.scale(1, coverScaleY);
 
   const armY = cell * 0.02;
   const armW = cell * 0.16;
@@ -418,21 +491,34 @@ function drawUnitSilhouette(
   }
 
   if (detail) {
-    const weaponX = facing * cell * 0.26;
-    const weaponY = armY - cell * 0.01;
+    const aim = aimingDir ?? peekDir ?? { x: facing, y: 0 };
+    const len = Math.hypot(aim.x, aim.y) || 1;
+    const ax = aim.x / len;
+    const ay = aim.y / len;
 
+    const handX = ax * cell * PLAYER_POSE.handReach;
+    const handY = armY + ay * cell * PLAYER_POSE.handVerticalReach;
+    const muzzleX = handX + ax * cell * PLAYER_POSE.weaponLength;
+    const muzzleY = handY + ay * cell * PLAYER_POSE.weaponLength;
+
+    ctx.fillStyle = PALETTE.UNIT_OUTLINE;
+    ctx.beginPath();
+    ctx.arc(handX, handY, cell * PLAYER_POSE.handRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineCap = "round";
     ctx.strokeStyle = "rgba(5, 7, 10, 0.92)";
     ctx.lineWidth = Math.max(2, cell * 0.07);
     ctx.beginPath();
-    ctx.moveTo(weaponX, weaponY);
-    ctx.lineTo(weaponX + facing * cell * 0.15, weaponY - cell * 0.06);
+    ctx.moveTo(handX, handY);
+    ctx.lineTo(muzzleX, muzzleY);
     ctx.stroke();
 
     ctx.strokeStyle = coreGlow;
     ctx.lineWidth = Math.max(1, cell * 0.025);
     ctx.beginPath();
-    ctx.moveTo(weaponX + facing * cell * 0.03, weaponY - cell * 0.01);
-    ctx.lineTo(weaponX + facing * cell * 0.15, weaponY - cell * 0.06);
+    ctx.moveTo(handX + ax * cell * 0.04, handY + ay * cell * 0.04);
+    ctx.lineTo(muzzleX, muzzleY);
     ctx.stroke();
   }
 
@@ -441,6 +527,7 @@ function drawUnitSilhouette(
     ctx.fillRect(-cell * 0.38, -cell * 0.43, cell * 0.76, cell * 0.82);
   }
 
+  ctx.restore();
   ctx.restore();
 }
 
@@ -665,6 +752,8 @@ function drawUnit(
   u: Unit,
   isSelected: boolean,
   mapHeightPx: number,
+  map: GameMap,
+  nowMs: number,
 ): void {
   const { px, py, cell } = g;
   const cx = px + cell / 2;
@@ -680,6 +769,8 @@ function drawUnit(
       : spent
         ? PALETTE.ENEMY_BODY_SPENT
         : PALETTE.ENEMY_BODY;
+
+  const visual = computeUnitVisualState(map, u, nowMs);
 
   if (fresh && !spent) {
     const ringColor = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
@@ -705,7 +796,7 @@ function drawUnit(
     ctx.restore();
   }
 
-  drawUnitSilhouette(ctx, g, u, bodyColor, spent);
+  drawUnitSilhouette(ctx, g, u, bodyColor, visual);
 
   if (u.overwatch) {
     const ringR = cell * 0.42;
