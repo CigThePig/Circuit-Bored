@@ -433,22 +433,15 @@ export function startRuntime(
 
   let rafId = 0;
   const tick = () => {
-    let needRedraw = false;
     if (floatingTexts.length > 0) {
       const now = performance.now();
       for (let i = floatingTexts.length - 1; i >= 0; i--) {
         if (floatingTexts[i].expiresAt <= now) floatingTexts.splice(i, 1);
       }
-      needRedraw = true;
     }
-    if (
-      turn === "player" &&
-      outcome === null &&
-      (state.threatMarkers?.length ?? 0) > 0
-    ) {
-      needRedraw = true;
-    }
-    if (needRedraw) redraw();
+    // Always repaint while a match is live so the unit idle bob and other
+    // time-based effects (threat pulse, peek lean) stay smooth.
+    if (outcome === null) redraw();
     rafId = requestAnimationFrame(tick);
   };
   rafId = requestAnimationFrame(tick);
