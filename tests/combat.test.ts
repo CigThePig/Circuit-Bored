@@ -240,38 +240,49 @@ describe("shotHitPenalty", () => {
     expect(shotHitPenalty(map, shooter, target)).toBe(Infinity);
   });
 
-  it("adds PEEK_PENALTY when shooting from a peek position with cover", () => {
-    // Shooter has a wall directly between but can peek around vertically.
-    // Layout: 5 wide, 3 tall.
-    //   . . # . .
-    //   p . # . e
-    //   . . . . h
-    // Shooter (0,1), target (4,1). Wall at (2,1) blocks direct.
-    // Peek down to (1,1) -> (1,2) and traverse along y=2 to (4,1) blocked
-    // by half_cover at (4,2)? half_cover doesn't block sight, so it can.
-    // We only need to confirm a peek shot exists and the penalty includes
-    // PEEK_PENALTY when there is cover.
+  it("applies PEEK_PENALTY alone when shooting from peek at a target in the open", () => {
+    // Shooter (1,1) is hidden behind wall (2,1). Target (4,2) is in the open.
+    // Direct LoS is blocked by the wall; shooter peeks down to (2,2) and the
+    // shot to (4,2) is clear with no cover on the target.
     const map = buildMap([
+      ".....",
       "..#..",
-      "p.#.e",
-      "....h",
+      ".....",
     ], [
-      { team: "player", x: 0, y: 1 },
-      { team: "enemy", x: 4, y: 1 },
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
     ]);
     const [shooter, target] = map.units;
     const shot = canShootTarget(map, shooter, target);
-    if (shot.canShoot && shot.mode === "peek") {
-      const penalty = shotHitPenalty(map, shooter, target);
-      const cover = targetCoverPenalty(map, shooter, target);
-      // Either there's no cover (penalty 0) or there is and the peek bonus
-      // gets added.
-      if (cover > 0) {
-        expect(penalty).toBeCloseTo(cover + PEEK_PENALTY, 5);
-      } else {
-        expect(penalty).toBe(0);
-      }
-    }
+    expect(shot.canShoot).toBe(true);
+    expect(shot.mode).toBe("peek");
+    expect(targetCoverPenalty(map, shooter, target)).toBe(0);
+    expect(shotHitPenalty(map, shooter, target)).toBeCloseTo(PEEK_PENALTY, 5);
+  });
+
+  it("adds PEEK_PENALTY on top of cover for a peek shot at a target with cover", () => {
+    // Same geometry, but a half-cover tile sits between the peek tile and
+    // the target on the dominant axis.
+    const map = buildMap([
+      ".....",
+      "..#..",
+      "...h.",
+    ], [
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    const shot = canShootTarget(map, shooter, target);
+    expect(shot.canShoot).toBe(true);
+    expect(shot.mode).toBe("peek");
+    expect(targetCoverPenalty(map, shooter, target)).toBeCloseTo(
+      HALF_COVER_PENALTY,
+      5,
+    );
+    expect(shotHitPenalty(map, shooter, target)).toBeCloseTo(
+      HALF_COVER_PENALTY + PEEK_PENALTY,
+      5,
+    );
   });
 });
 
