@@ -446,7 +446,10 @@ export function targetHasCover(
 /**
  * Effective hit-chance penalty for a shot. Uses canShootTarget for the
  * geometry: if blocked, returns Infinity (caller should clamp via resolveShot).
- * If shooting from a peek, adds PEEK_PENALTY only when the target has cover.
+ * For a direct shot, the penalty is just the target's cover penalty. For a
+ * peek shot, PEEK_PENALTY is added on top of the target's cover penalty -
+ * including when the target has no cover - because the shooter is leaning
+ * around their own cover and that always degrades aim.
  */
 export function shotHitPenalty(
   map: GameMap,
@@ -456,7 +459,6 @@ export function shotHitPenalty(
   const shot = canShootTarget(map, shooter, target);
   if (!shot.canShoot) return Infinity;
   const cover = targetCoverPenalty(map, shooter, target);
-  if (cover === 0) return 0;
   return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
 }
 
