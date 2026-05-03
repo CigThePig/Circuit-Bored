@@ -332,3 +332,95 @@ describe("resolveShot", () => {
     expect(target.hp).toBe(target.maxHp);
   });
 });
+
+describe("committed peek exposure", () => {
+  // Layout used for several tests:
+  //   shooter at (1,1), wall at (2,1), target at (4,2). Shooter's only shot
+  //   is a peek via (2,2). The wall blocks direct strict LoS in either
+  //   direction across the diagonal.
+  const peekRows = [
+    ".....",
+    "..#..",
+    ".....",
+  ];
+
+  it("a peek shot sets peekExposure to the peek tile", () => {
+    const map = buildMap(peekRows, [
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    const shot = canShootTarget(map, shooter, target);
+    expect(shot.canShoot).toBe(true);
+    expect(shot.mode).toBe("peek");
+    expect(shooter.peekExposure).toBeNull();
+    resolveShot(map, shooter, target, () => 0.99);
+    expect(shooter.peekExposure).toEqual({ x: 2, y: 2 });
+  });
+
+  it("a direct shot does not set peekExposure", () => {
+    const map = buildMap(["....."], [
+      { team: "player", x: 0, y: 0 },
+      { team: "enemy", x: 4, y: 0 },
+    ]);
+    const [shooter, target] = map.units;
+    const shot = canShootTarget(map, shooter, target);
+    expect(shot.mode).toBe("direct");
+    resolveShot(map, shooter, target, () => 0.99);
+    expect(shooter.peekExposure).toBeNull();
+  });
+
+  it("a target hidden from a shooter becomes shootable through its exposure tile", () => {
+    const map = buildMap(peekRows, [
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    // Without exposure: the enemy at (4,2) cannot shoot the player at (1,1)
+    // because the diagonal step at (1,1) is corner-blocked by the wall (2,1).
+    const before = canShootTarget(map, target, shooter);
+    expect(before.canShoot).toBe(false);
+    expect(before.mode).toBe("blocked");
+
+    // Player peek-shoots, exposing themselves at (2,2).
+    resolveShot(map, shooter, target, () => 0.99);
+    expect(shooter.peekExposure).toEqual({ x: 2, y: 2 });
+
+    const after = canShootTarget(map, target, shooter);
+    expect(after.canShoot).toBe(true);
+    expect(after.targetExposure).toBe(true);
+  });
+
+  it("damage from a shot through exposure applies to the real unit", () => {
+    const map = buildMap(peekRows, [
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    resolveShot(map, shooter, target, () => 0.99); // miss but expose
+    expect(shooter.peekExposure).toEqual({ x: 2, y: 2 });
+
+    const beforeHp = shooter.hp;
+    const beforeX = shooter.x;
+    const beforeY = shooter.y;
+    const result = resolveShot(map, target, shooter, () => 0);
+    expect(result.hit).toBe(true);
+    expect(shooter.hp).toBeLessThan(beforeHp);
+    expect(shooter.x).toBe(beforeX);
+    expect(shooter.y).toBe(beforeY);
+  });
+
+  it("dying clears peekExposure", () => {
+    const map = buildMap(peekRows, [
+      { team: "player", x: 1, y: 1, hp: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    resolveShot(map, shooter, target, () => 0.99);
+    expect(shooter.peekExposure).toEqual({ x: 2, y: 2 });
+    // Enemy fires back through the exposure and kills the player.
+    resolveShot(map, target, shooter, () => 0);
+    expect(shooter.hp).toBe(0);
+    expect(shooter.peekExposure).toBeNull();
+  });
+});

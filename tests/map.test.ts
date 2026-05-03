@@ -27,6 +27,7 @@ const validUnit = (
   ap: UNIT_AP,
   maxAp: UNIT_AP,
   overwatch: false,
+  peekExposure: null,
 });
 
 describe("validateMap", () => {

@@ -31,6 +31,7 @@ export const AI_SCORE_COVER = 30;
 export const AI_SCORE_ADJACENT_ALLY = -5;
 export const AI_SCORE_DISTANCE = -1;
 export const AI_SCORE_EXPOSED = -20;
+export const AI_SCORE_PEEK_EXPOSURE_RISK = -70;
 
 function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
@@ -215,6 +216,9 @@ function scoreCandidate(
       const penalty = shotHitPenalty(map, enemy, target);
       const hitChance = penalty === Infinity ? 0 : Math.max(0, BASE_HIT - penalty);
       score += Math.round(hitChance * AI_SCORE_HIT_CHANCE);
+      if (shot.mode === "peek") {
+        score += AI_SCORE_PEEK_EXPOSURE_RISK;
+      }
     }
     const coverFromTarget = targetCoverPenalty(map, target, enemy);
     if (coverFromTarget > 0) score += AI_SCORE_COVER;
@@ -245,6 +249,7 @@ export function beginEnemyTurn(
   enemy: Unit,
   session: AiSession,
 ): void {
+  enemy.peekExposure = null;
   const target = closestPlayer(map, enemy);
   if (target) {
     session.turnTargets.set(enemy.id, target.id);
@@ -340,5 +345,6 @@ export function takeEnemyAction(
   enemy.x = step.x;
   enemy.y = step.y;
   enemy.ap -= 1;
+  enemy.peekExposure = null;
   return { kind: "move", from, to: { x: enemy.x, y: enemy.y } };
 }

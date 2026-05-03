@@ -385,6 +385,7 @@ export function sanitizeLoadedMap(raw: unknown): {
       ap,
       maxAp,
       overwatch,
+      peekExposure: null,
     });
   }
 

@@ -48,6 +48,7 @@ export function startRuntime(
     u.hp = u.maxHp;
     u.ap = u.maxAp;
     u.overwatch = false;
+    u.peekExposure = null;
   }
 
   const startupReport = validateMap(map);
@@ -321,6 +322,7 @@ export function startRuntime(
       selected.x = x;
       selected.y = y;
       selected.ap -= 1;
+      selected.peekExposure = null;
       if (selected.ap <= 0) selected = null;
       redraw();
     }
@@ -391,6 +393,7 @@ export function startRuntime(
         if (u.team === "player" && u.hp > 0) {
           u.ap = u.maxAp;
           u.overwatch = false;
+          u.peekExposure = null;
         }
       }
       showTurnBanner("player");
@@ -412,7 +415,10 @@ export function startRuntime(
     if (turn !== "player" || outcome !== null || busy) return;
     turn = "enemy";
     for (const u of map.units) {
-      if (u.team === "enemy" && u.hp > 0) u.ap = u.maxAp;
+      if (u.team === "enemy" && u.hp > 0) {
+        u.ap = u.maxAp;
+        u.peekExposure = null;
+      }
     }
     selected = null;
     showTurnBanner("enemy");

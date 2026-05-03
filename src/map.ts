@@ -16,6 +16,7 @@ export type Unit = {
   ap: number;
   maxAp: number;
   overwatch: boolean;
+  peekExposure: { x: number; y: number } | null;
 };
 
 export type GameMap = {
@@ -89,6 +90,7 @@ export function makeUnit(team: "player" | "enemy", x: number, y: number): Unit {
     ap: UNIT_AP,
     maxAp: UNIT_AP,
     overwatch: false,
+    peekExposure: null,
   };
 }
 
