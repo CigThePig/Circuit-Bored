@@ -232,26 +232,216 @@ function roundRect(
   ctx.closePath();
 }
 
-function unitBodyPath(
+function ellipsePath(
   ctx: CanvasRenderingContext2D,
-  px: number,
-  py: number,
-  cell: number,
-  pad: number,
-  r: number,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
 ): void {
-  const left = px + pad;
-  const right = px + cell - pad;
-  const top = py + pad;
-  const bottom = py + cell - pad;
   ctx.beginPath();
-  ctx.moveTo(left, top + r);
-  ctx.quadraticCurveTo(left, top, left + r, top);
-  ctx.lineTo(right - r, top);
-  ctx.quadraticCurveTo(right, top, right, top + r);
-  ctx.lineTo(right, bottom);
-  ctx.lineTo(left, bottom);
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+}
+
+function capsulePath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  roundRect(ctx, x, y, w, h, Math.min(w, h) / 2);
+}
+
+function topDownTorsoPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+): void {
+  const topW = w * 0.66;
+  const botW = w * 0.92;
+  const topY = cy - h * 0.44;
+  const midY = cy + h * 0.08;
+  const botY = cy + h * 0.46;
+  ctx.beginPath();
+  ctx.moveTo(cx - topW / 2, topY);
+  ctx.quadraticCurveTo(cx, topY - h * 0.18, cx + topW / 2, topY);
+  ctx.lineTo(cx + botW / 2, midY);
+  ctx.quadraticCurveTo(cx + botW * 0.46, botY, cx, botY);
+  ctx.quadraticCurveTo(cx - botW * 0.46, botY, cx - botW / 2, midY);
   ctx.closePath();
+}
+
+function strokeUnitLine(
+  ctx: CanvasRenderingContext2D,
+  stroke: string,
+  width: number,
+): void {
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = width;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.stroke();
+}
+
+function fillAndStroke(
+  ctx: CanvasRenderingContext2D,
+  fill: string,
+  stroke = PALETTE.UNIT_OUTLINE,
+  width = 1,
+): void {
+  ctx.fillStyle = fill;
+  ctx.fill();
+  strokeUnitLine(ctx, stroke, width);
+}
+
+function drawUnitSilhouette(
+  ctx: CanvasRenderingContext2D,
+  g: Geom,
+  u: Unit,
+  bodyColor: string,
+  spent: boolean,
+): void {
+  const { px, py, cell } = g;
+  const cx = px + cell / 2;
+  const cy = py + cell / 2;
+  const facing = u.team === "player" ? 1 : -1;
+  const detail = cell >= 18;
+
+  const outlineW = Math.max(1, cell * 0.035);
+  const accent = u.team === "player" ? PALETTE.PLAYER_ACCENT : PALETTE.ENEMY_VISOR;
+  const headColor = u.team === "player" ? PALETTE.PLAYER_HEAD : PALETTE.ENEMY_HEAD;
+  const coreGlow = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.beginPath();
+  ctx.ellipse(0, cell * 0.24, cell * 0.30, cell * 0.11, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const armY = cell * 0.02;
+  const armW = cell * 0.16;
+  const armH = cell * 0.33;
+  const shoulderY = -cell * 0.05;
+
+  capsulePath(ctx, -cell * 0.31, shoulderY, armW, armH);
+  fillAndStroke(ctx, bodyColor, PALETTE.UNIT_OUTLINE, outlineW);
+
+  capsulePath(ctx, cell * 0.15, shoulderY, armW, armH);
+  fillAndStroke(ctx, bodyColor, PALETTE.UNIT_OUTLINE, outlineW);
+
+  if (detail) {
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-cell * 0.27, shoulderY + cell * 0.04, armW * 0.22, armH * 0.70);
+    ctx.fillRect(cell * 0.19, shoulderY + cell * 0.04, armW * 0.22, armH * 0.70);
+    ctx.restore();
+  }
+
+  topDownTorsoPath(ctx, 0, cell * 0.08, cell * 0.44, cell * 0.58);
+  fillAndStroke(ctx, bodyColor, PALETTE.UNIT_OUTLINE, outlineW);
+
+  if (detail) {
+    ctx.save();
+    topDownTorsoPath(ctx, 0, cell * 0.08, cell * 0.44, cell * 0.58);
+    ctx.clip();
+    ctx.globalAlpha = 0.24;
+    const grad = ctx.createLinearGradient(
+      -cell * 0.18,
+      -cell * 0.18,
+      cell * 0.20,
+      cell * 0.34,
+    );
+    grad.addColorStop(0, "#ffffff");
+    grad.addColorStop(0.55, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(-cell * 0.24, -cell * 0.28, cell * 0.48, cell * 0.72);
+    ctx.restore();
+
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = Math.max(1, cell * 0.035);
+    ctx.beginPath();
+    ctx.moveTo(-cell * 0.13, cell * 0.05);
+    ctx.lineTo(0, cell * 0.22);
+    ctx.lineTo(cell * 0.13, cell * 0.05);
+    ctx.stroke();
+  }
+
+  const headY = -cell * 0.24;
+  ellipsePath(ctx, 0, headY, cell * 0.22, cell * 0.19);
+  fillAndStroke(ctx, headColor, PALETTE.UNIT_OUTLINE, outlineW);
+
+  if (detail) {
+    ctx.save();
+    ellipsePath(ctx, 0, headY, cell * 0.22, cell * 0.19);
+    ctx.clip();
+    ctx.fillStyle =
+      u.team === "player"
+        ? "rgba(8, 28, 55, 0.45)"
+        : "rgba(20, 0, 0, 0.62)";
+    roundRect(
+      ctx,
+      -cell * 0.15,
+      headY - cell * 0.03,
+      cell * 0.30,
+      cell * 0.08,
+      cell * 0.04,
+    );
+    ctx.fill();
+
+    ctx.fillStyle = coreGlow;
+    ctx.globalAlpha = u.team === "player" ? 0.9 : 0.75;
+    ctx.fillRect(
+      -cell * 0.09,
+      headY - cell * 0.015,
+      cell * 0.18,
+      Math.max(1, cell * 0.018),
+    );
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.40)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(
+      -cell * 0.06,
+      headY - cell * 0.05,
+      cell * 0.06,
+      Math.PI * 1.15,
+      Math.PI * 1.75,
+    );
+    ctx.stroke();
+  }
+
+  if (detail) {
+    const weaponX = facing * cell * 0.26;
+    const weaponY = armY - cell * 0.01;
+
+    ctx.strokeStyle = "rgba(5, 7, 10, 0.92)";
+    ctx.lineWidth = Math.max(2, cell * 0.07);
+    ctx.beginPath();
+    ctx.moveTo(weaponX, weaponY);
+    ctx.lineTo(weaponX + facing * cell * 0.15, weaponY - cell * 0.06);
+    ctx.stroke();
+
+    ctx.strokeStyle = coreGlow;
+    ctx.lineWidth = Math.max(1, cell * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(weaponX + facing * cell * 0.03, weaponY - cell * 0.01);
+    ctx.lineTo(weaponX + facing * cell * 0.15, weaponY - cell * 0.06);
+    ctx.stroke();
+  }
+
+  if (spent) {
+    ctx.fillStyle = PALETTE.SPENT_VEIL;
+    ctx.fillRect(-cell * 0.38, -cell * 0.43, cell * 0.76, cell * 0.82);
+  }
+
+  ctx.restore();
 }
 
 function drawFloorTile(
@@ -477,15 +667,10 @@ function drawUnit(
   mapHeightPx: number,
 ): void {
   const { px, py, cell } = g;
-  const pad = Math.max(2, Math.floor(cell * 0.12));
   const cx = px + cell / 2;
   const cy = py + cell / 2;
   const fresh = u.ap === u.maxAp;
   const spent = u.ap === 0;
-  const r = Math.max(2, Math.floor(cell * 0.10));
-  const showDetail = cell >= 18;
-  const headR = Math.max(2, Math.floor(cell * 0.13));
-  const headCy = py + pad + r * 0.6;
 
   const bodyColor =
     u.team === "player"
@@ -496,72 +681,31 @@ function drawUnit(
         ? PALETTE.ENEMY_BODY_SPENT
         : PALETTE.ENEMY_BODY;
 
-  unitBodyPath(ctx, px, py, cell, pad, r);
-  ctx.fillStyle = bodyColor;
-  ctx.fill();
-  ctx.strokeStyle = PALETTE.UNIT_OUTLINE;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  if (showDetail) {
-    if (u.team === "player") {
-      const stripeY = py + pad + cell * 0.40;
-      ctx.save();
-      unitBodyPath(ctx, px, py, cell, pad, r);
-      ctx.clip();
-      ctx.strokeStyle = PALETTE.PLAYER_ACCENT;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(px + pad, stripeY + 0.5);
-      ctx.lineTo(px + cell - pad, stripeY + 0.5);
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      const visorY = py + pad + cell * 0.10;
-      const visorH = Math.max(2, Math.floor(cell * 0.08));
-      ctx.save();
-      unitBodyPath(ctx, px, py, cell, pad, r);
-      ctx.clip();
-      ctx.fillStyle = PALETTE.ENEMY_VISOR;
-      ctx.fillRect(px + pad, visorY, cell - pad * 2, visorH);
-      ctx.restore();
-    }
-
-    ctx.fillStyle = u.team === "player" ? PALETTE.PLAYER_HEAD : PALETTE.ENEMY_HEAD;
-    ctx.beginPath();
-    ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = PALETTE.UNIT_OUTLINE;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  if (spent) {
-    ctx.fillStyle = PALETTE.SPENT_VEIL;
-    unitBodyPath(ctx, px, py, cell, pad, r);
-    ctx.fill();
-    if (showDetail) {
-      ctx.beginPath();
-      ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
   if (fresh && !spent) {
     const ringColor = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
     const glowColor =
       u.team === "player" ? PALETTE.FRESH_GLOW_PLAYER : PALETTE.FRESH_GLOW_ENEMY;
+
     ctx.save();
     ctx.shadowColor = glowColor;
     ctx.shadowBlur = Math.max(4, Math.floor(cell * 0.18));
     ctx.strokeStyle = ringColor;
-    ctx.lineWidth = Math.max(2, Math.floor(cell * 0.06));
+    ctx.lineWidth = Math.max(2, Math.floor(cell * 0.055));
     ctx.beginPath();
-    ctx.arc(cx, cy, cell * 0.46, 0, Math.PI * 2);
+    ctx.ellipse(
+      cx,
+      cy + cell * 0.03,
+      cell * 0.39,
+      cell * 0.34,
+      0,
+      0,
+      Math.PI * 2,
+    );
     ctx.stroke();
-    ctx.shadowBlur = 0;
     ctx.restore();
   }
+
+  drawUnitSilhouette(ctx, g, u, bodyColor, spent);
 
   if (u.overwatch) {
     const ringR = cell * 0.42;
@@ -570,6 +714,7 @@ function drawUnit(
     ctx.beginPath();
     ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
     ctx.stroke();
+
     const tickLen = Math.max(2, Math.floor(cell * 0.06));
     ctx.lineWidth = 2;
     const dirs: [number, number][] = [
@@ -578,6 +723,7 @@ function drawUnit(
       [0, 1],
       [-1, 0],
     ];
+
     ctx.beginPath();
     for (const [dx, dy] of dirs) {
       const ix = cx + dx * (ringR - 2);
@@ -593,6 +739,7 @@ function drawUnit(
   if (isSelected) {
     const len = Math.max(4, Math.floor(cell * 0.22));
     const inset = 2;
+
     ctx.save();
     ctx.shadowColor = PALETTE.SELECTED_GLOW;
     ctx.shadowBlur = 4;
@@ -612,7 +759,6 @@ function drawUnit(
     ctx.lineTo(px + cell - inset, py + cell - inset);
     ctx.lineTo(px + cell - inset, py + cell - inset - len);
     ctx.stroke();
-    ctx.shadowBlur = 0;
     ctx.restore();
   }
 
