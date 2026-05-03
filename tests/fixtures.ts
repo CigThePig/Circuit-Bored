@@ -53,6 +53,7 @@ export function buildMap(rows: string[], units: UnitInput[] = []): GameMap {
     ap: u.ap ?? UNIT_AP,
     maxAp: u.maxAp ?? UNIT_AP,
     overwatch: u.overwatch ?? false,
+    peekExposure: null,
   }));
   return { width, height, tiles, units: realized };
 }
@@ -68,5 +69,6 @@ export function unit(input: UnitInput): Unit {
     ap: input.ap ?? UNIT_AP,
     maxAp: input.maxAp ?? UNIT_AP,
     overwatch: input.overwatch ?? false,
+    peekExposure: null,
   };
 }

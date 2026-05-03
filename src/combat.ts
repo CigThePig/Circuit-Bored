@@ -303,7 +303,22 @@ export type ShotLineResult = {
   from: { x: number; y: number };
   peekFrom?: { x: number; y: number };
   blockingTiles?: { x: number; y: number }[];
+  targetExposure?: boolean;
 };
+
+function isPeekTileShootable(
+  map: GameMap,
+  shooter: Unit,
+  px: number,
+  py: number,
+): boolean {
+  if (!inBounds(map, px, py)) return false;
+  const t = getTile(map, px, py);
+  if (t === "wall" || t === "half_cover") return false;
+  const occupant = unitAt(map, px, py);
+  if (occupant && occupant.id !== shooter.id) return false;
+  return true;
+}
 
 /**
  * Decides whether `shooter` can shoot `target` and from where.
@@ -311,7 +326,11 @@ export type ShotLineResult = {
  * 2) Else iterates peek positions toward the target. A peek tile is valid
  *    only when in-bounds, not a wall/half_cover, not occupied by another
  *    living unit, and has strict LoS to the target.
- * 3) Otherwise returns mode "blocked".
+ * 3) If the target has peekExposure, the exposed tile acts as a temporary
+ *    silhouette: the shooter can shoot it directly or via their own peek.
+ *    targetExposure is set true on the result; damage still applies to the
+ *    real unit.
+ * 4) Otherwise returns mode "blocked".
  */
 export function canShootTarget(
   map: GameMap,
@@ -328,11 +347,7 @@ export function canShootTarget(
   }
 
   for (const peek of getPeekPositionsToward(map, sx, sy, tx, ty)) {
-    if (!inBounds(map, peek.x, peek.y)) continue;
-    const t = getTile(map, peek.x, peek.y);
-    if (t === "wall" || t === "half_cover") continue;
-    const occupant = unitAt(map, peek.x, peek.y);
-    if (occupant && occupant.id !== shooter.id) continue;
+    if (!isPeekTileShootable(map, shooter, peek.x, peek.y)) continue;
     if (!hasStrictLineOfSight(map, peek.x, peek.y, tx, ty)) continue;
     return {
       canShoot: true,
@@ -340,6 +355,31 @@ export function canShootTarget(
       from: { x: peek.x, y: peek.y },
       peekFrom: { x: peek.x, y: peek.y },
     };
+  }
+
+  const exposure = target.peekExposure;
+  if (exposure) {
+    const ex = exposure.x;
+    const ey = exposure.y;
+    if (hasStrictLineOfSight(map, sx, sy, ex, ey)) {
+      return {
+        canShoot: true,
+        mode: "direct",
+        from: { x: sx, y: sy },
+        targetExposure: true,
+      };
+    }
+    for (const peek of getPeekPositionsToward(map, sx, sy, ex, ey)) {
+      if (!isPeekTileShootable(map, shooter, peek.x, peek.y)) continue;
+      if (!hasStrictLineOfSight(map, peek.x, peek.y, ex, ey)) continue;
+      return {
+        canShoot: true,
+        mode: "peek",
+        from: { x: peek.x, y: peek.y },
+        peekFrom: { x: peek.x, y: peek.y },
+        targetExposure: true,
+      };
+    }
   }
 
   const blockers = firstBlockingTilesStrict(map, sx, sy, tx, ty);
@@ -377,6 +417,9 @@ export function hasShotLineOfSight(
 /**
  * Overwatch reaction predicate: was the mover hidden at `from` and visible
  * at `to` from the watcher's perspective using strict LoS / peek rules?
+ *
+ * Peek exposure on the mover is intentionally ignored here - overwatch must
+ * depend only on movement and real visibility, not on a transient silhouette.
  */
 export function overwatchShouldFire(
   map: GameMap,
@@ -387,8 +430,8 @@ export function overwatchShouldFire(
 ): boolean {
   if (!watcher.overwatch) return false;
   if (watcher.hp <= 0) return false;
-  const moverFrom: Unit = { ...mover, x: from.x, y: from.y };
-  const moverTo: Unit = { ...mover, x: to.x, y: to.y };
+  const moverFrom: Unit = { ...mover, x: from.x, y: from.y, peekExposure: null };
+  const moverTo: Unit = { ...mover, x: to.x, y: to.y, peekExposure: null };
   const sawBefore = canShootTarget(map, watcher, moverFrom).canShoot;
   const seesNow = canShootTarget(map, watcher, moverTo).canShoot;
   return !sawBefore && seesNow;
@@ -458,7 +501,18 @@ export function shotHitPenalty(
 ): number {
   const shot = canShootTarget(map, shooter, target);
   if (!shot.canShoot) return Infinity;
-  const cover = targetCoverPenalty(map, shooter, target);
+  let cover: number;
+  if (shot.targetExposure && target.peekExposure) {
+    // The target leaned out: cover is evaluated against the silhouette tile.
+    const silhouette: Unit = {
+      ...target,
+      x: target.peekExposure.x,
+      y: target.peekExposure.y,
+    };
+    cover = targetCoverPenalty(map, shooter, silhouette);
+  } else {
+    cover = targetCoverPenalty(map, shooter, target);
+  }
   return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
 }
 
@@ -475,7 +529,17 @@ export function resolveShot(
   target: Unit,
   rng: () => number = Math.random,
 ): ShotResult {
-  const penalty = shotHitPenalty(map, shooter, target);
+  const shot = canShootTarget(map, shooter, target);
+  const cover = shot.canShoot && shot.targetExposure && target.peekExposure
+    ? targetCoverPenalty(map, shooter, {
+        ...target,
+        x: target.peekExposure.x,
+        y: target.peekExposure.y,
+      })
+    : targetCoverPenalty(map, shooter, target);
+  const penalty = shot.canShoot
+    ? (shot.mode === "peek" ? cover + PEEK_PENALTY : cover)
+    : Infinity;
   const hadCover = penalty > 0;
   const hitChance = Math.max(0, BASE_HIT - penalty);
   const roll = rng();
@@ -483,6 +547,12 @@ export function resolveShot(
   const damage = hit ? SHOT_DAMAGE : 0;
   if (hit) {
     target.hp = Math.max(0, target.hp - damage);
+    if (target.hp <= 0) {
+      target.peekExposure = null;
+    }
+  }
+  if (shot.canShoot && shot.mode === "peek" && shot.peekFrom) {
+    shooter.peekExposure = { x: shot.peekFrom.x, y: shot.peekFrom.y };
   }
   return { hit, damage, hitChance, hadCover };
 }

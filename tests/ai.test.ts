@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { beginEnemyTurn, takeEnemyAction, type AiAction } from "../src/ai.ts";
+import {
+  AI_SCORE_PEEK_EXPOSURE_RISK,
+  beginEnemyTurn,
+  takeEnemyAction,
+  type AiAction,
+} from "../src/ai.ts";
 import { createAiSession } from "../src/aiSession.ts";
 import { buildMap } from "./fixtures.ts";
 
@@ -125,6 +130,49 @@ describe("AI movement", () => {
     const log = runEnemyTurn(map, 1);
     // Enemy is fully boxed in; we expect a wait somewhere in the log.
     expect(log.some((a) => a.kind === "wait")).toBe(true);
+  });
+
+  it("moving via the AI clears peekExposure", () => {
+    // Enemy is fully blocked from the player by a wall column with no peek
+    // option (perpendicular tiles are walls too) - so its only choice is to
+    // move. We pre-set a peekExposure on the enemy to simulate a previous
+    // peek shot, then verify the move clears it.
+    const map = buildMap([
+      "...#...",
+      "...#...",
+      "...#...",
+    ], [
+      { team: "player", x: 0, y: 1 },
+      { team: "enemy", x: 6, y: 1 },
+    ]);
+    const enemy = map.units[1];
+    enemy.peekExposure = { x: 6, y: 0 };
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    // beginEnemyTurn clears exposure on its own; reseed it to test the move
+    // path specifically.
+    enemy.peekExposure = { x: 6, y: 0 };
+    const action = takeEnemyAction(map, enemy, session);
+    expect(action.kind).toBe("move");
+    expect(enemy.peekExposure).toBeNull();
+  });
+
+  it("starting a new enemy turn clears peekExposure", () => {
+    const map = buildMap([
+      "p.....e",
+    ], [
+      { team: "player", x: 0, y: 0 },
+      { team: "enemy", x: 6, y: 0 },
+    ]);
+    const enemy = map.units[1];
+    enemy.peekExposure = { x: 5, y: 0 };
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    expect(enemy.peekExposure).toBeNull();
+  });
+
+  it("exposes the peek exposure risk constant as a negative penalty", () => {
+    expect(AI_SCORE_PEEK_EXPOSURE_RISK).toBeLessThan(0);
   });
 
   it("can move and then shoot in the same turn when AP allows", () => {
