@@ -552,7 +552,12 @@ export function resolveShot(
     }
   }
   if (shot.canShoot && shot.mode === "peek" && shot.peekFrom) {
-    shooter.peekExposure = { x: shot.peekFrom.x, y: shot.peekFrom.y };
+    // Geometry guarantees peekFrom is one diagonal step from the shooter;
+    // clamp defensively so a future regression in peek-tile selection can't
+    // push the rendered lean past one cell.
+    const ddx = Math.max(-1, Math.min(1, shot.peekFrom.x - shooter.x));
+    const ddy = Math.max(-1, Math.min(1, shot.peekFrom.y - shooter.y));
+    shooter.peekExposure = { x: shooter.x + ddx, y: shooter.y + ddy };
   }
   return { hit, damage, hitChance, hadCover };
 }
