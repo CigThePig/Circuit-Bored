@@ -43,10 +43,16 @@ function computeUnitVisualState(
   const inCover = isAdjacentToCover(map, u.x, u.y);
   let peekDir: { x: number; y: number } | null = null;
   if (u.peekExposure) {
-    const dx = u.peekExposure.x - u.x;
-    const dy = u.peekExposure.y - u.y;
-    if (dx !== 0 || dy !== 0) {
-      peekDir = { x: Math.sign(dx), y: Math.sign(dy) };
+    // Clamp each axis to ±1 and normalize so diagonal and straight peeks
+    // both produce a unit-vector lean of magnitude PLAYER_POSE.peekOffset.
+    // Without this, diagonal peeks lean by 0.14 * sqrt(2) per cell, almost
+    // 0.2 cell, which reads as the sprite physically travelling toward the
+    // corner instead of leaning.
+    const cx = Math.max(-1, Math.min(1, u.peekExposure.x - u.x));
+    const cy = Math.max(-1, Math.min(1, u.peekExposure.y - u.y));
+    const len = Math.hypot(cx, cy);
+    if (len > 0) {
+      peekDir = { x: cx / len, y: cy / len };
     }
   }
   // TODO: aimingDir would require tracking the unit's current shot target;
@@ -496,10 +502,16 @@ function drawUnitSilhouette(
     const ax = aim.x / len;
     const ay = aim.y / len;
 
-    const handX = ax * cell * PLAYER_POSE.handReach;
-    const handY = armY + ay * cell * PLAYER_POSE.handVerticalReach;
-    const muzzleX = handX + ax * cell * PLAYER_POSE.weaponLength;
-    const muzzleY = handY + ay * cell * PLAYER_POSE.weaponLength;
+    // Use isotropic reach so diagonal peek aim doesn't elongate the gun
+    // disproportionately on the X axis. Upward aim still uses the dampened
+    // vertical reach so the muzzle doesn't poke through the head.
+    const reach = cell * PLAYER_POSE.handReach;
+    const upScale = ay < 0 ? PLAYER_POSE.handVerticalReach / PLAYER_POSE.handReach : 1;
+    const handX = ax * reach;
+    const handY = armY + ay * reach * upScale;
+    const muzzleLen = cell * PLAYER_POSE.weaponLength;
+    const muzzleX = handX + ax * muzzleLen;
+    const muzzleY = handY + ay * muzzleLen * upScale;
 
     ctx.fillStyle = PALETTE.UNIT_OUTLINE;
     ctx.beginPath();

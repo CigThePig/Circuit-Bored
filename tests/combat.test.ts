@@ -423,4 +423,18 @@ describe("committed peek exposure", () => {
     expect(shooter.hp).toBe(0);
     expect(shooter.peekExposure).toBeNull();
   });
+
+  it("repeated peek shots keep peekExposure within one diagonal step of the shooter", () => {
+    const map = buildMap(peekRows, [
+      { team: "player", x: 1, y: 1 },
+      { team: "enemy", x: 4, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    resolveShot(map, shooter, target, () => 0.99);
+    const first = { ...shooter.peekExposure! };
+    resolveShot(map, shooter, target, () => 0.99);
+    expect(shooter.peekExposure).toEqual(first);
+    expect(Math.abs(shooter.peekExposure!.x - shooter.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(shooter.peekExposure!.y - shooter.y)).toBeLessThanOrEqual(1);
+  });
 });
