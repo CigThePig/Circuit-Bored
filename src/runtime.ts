@@ -104,6 +104,19 @@ export function startRuntime(
   hud.appendChild(apLabel);
   hud.appendChild(row);
 
+  // Cleared at the start of every redraw and used to skip duplicate
+  // hasShotLineOfSight calls within a single frame.
+  const losCache = new Map<string, boolean>();
+  const cachedLos = (ax: number, ay: number, bx: number, by: number): boolean => {
+    const key = `${ax},${ay}|${bx},${by}`;
+    let v = losCache.get(key);
+    if (v === undefined) {
+      v = hasShotLineOfSight(map, ax, ay, bx, by);
+      losCache.set(key, v);
+    }
+    return v;
+  };
+
   const computeOverlays = () => {
     state.coverIndicators = [];
     state.threatMarkers = [];
@@ -115,7 +128,7 @@ export function startRuntime(
       let seesAny = false;
       for (const p of map.units) {
         if (p.team !== "player" || p.hp <= 0) continue;
-        if (hasShotLineOfSight(map, e.x, e.y, p.x, p.y)) {
+        if (cachedLos(e.x, e.y, p.x, p.y)) {
           seesAny = true;
           break;
         }
@@ -152,7 +165,7 @@ export function startRuntime(
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
-      if (hasShotLineOfSight(map, selected.x, selected.y, e.x, e.y)) {
+      if (cachedLos(selected.x, selected.y, e.x, e.y)) {
         state.sightLines!.push({
           fromX: selected.x,
           fromY: selected.y,
@@ -189,7 +202,7 @@ export function startRuntime(
     if (selected.ap >= 2) {
       for (const u of map.units) {
         if (u.team !== "enemy" || u.hp <= 0) continue;
-        if (!hasShotLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
+        if (!cachedLos(selected.x, selected.y, u.x, u.y)) continue;
         state.highlights.push({
           x: u.x,
           y: u.y,
@@ -236,6 +249,7 @@ export function startRuntime(
   };
 
   const redraw = () => {
+    losCache.clear();
     state.selected = selected;
     computeHighlights();
     computeOverlays();
