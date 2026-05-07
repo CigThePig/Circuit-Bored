@@ -278,21 +278,18 @@ export function takeEnemyAction(
 
   // Re-check shoot now using current LoS and current AP.
   if (enemy.ap >= SHOOT_AP_COST) {
-    if (canShootTarget(map, enemy, target).canShoot) {
-      enemy.ap -= SHOOT_AP_COST;
-      const result = resolveShot(map, enemy, target);
-      return { kind: "shoot", target, result };
-    }
     const visible = visiblePlayers(map, enemy);
     if (visible.length > 0) {
-      // Pick the visible player with the best hit chance.
-      let best = visible[0];
+      // Prefer the persisted target if it's still visible; otherwise pick
+      // the visible player with the best hit chance.
+      let best = visible.includes(target) ? target : visible[0];
       let bestPenalty = shotHitPenalty(map, enemy, best);
-      for (let i = 1; i < visible.length; i++) {
-        const p = shotHitPenalty(map, enemy, visible[i]);
-        if (p < bestPenalty) {
-          bestPenalty = p;
-          best = visible[i];
+      for (const p of visible) {
+        if (p === best) continue;
+        const penalty = shotHitPenalty(map, enemy, p);
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty;
+          best = p;
         }
       }
       enemy.ap -= SHOOT_AP_COST;

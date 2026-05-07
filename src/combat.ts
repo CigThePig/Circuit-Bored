@@ -530,16 +530,7 @@ export function resolveShot(
   rng: () => number = Math.random,
 ): ShotResult {
   const shot = canShootTarget(map, shooter, target);
-  const cover = shot.canShoot && shot.targetExposure && target.peekExposure
-    ? targetCoverPenalty(map, shooter, {
-        ...target,
-        x: target.peekExposure.x,
-        y: target.peekExposure.y,
-      })
-    : targetCoverPenalty(map, shooter, target);
-  const penalty = shot.canShoot
-    ? (shot.mode === "peek" ? cover + PEEK_PENALTY : cover)
-    : Infinity;
+  const penalty = shot.canShoot ? shotHitPenalty(map, shooter, target) : Infinity;
   const hadCover = penalty > 0;
   const hitChance = Math.max(0, BASE_HIT - penalty);
   const roll = rng();

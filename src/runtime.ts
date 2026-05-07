@@ -239,7 +239,6 @@ export function startRuntime(
     state.selected = selected;
     computeHighlights();
     computeOverlays();
-    state.floatingTexts = floatingTexts.filter((t) => t.expiresAt > performance.now());
     draw(canvas, state);
     updateHud();
   };

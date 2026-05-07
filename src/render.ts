@@ -188,12 +188,13 @@ type Geom = { px: number; py: number; cell: number };
 export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
   const cssWidth = Math.min(window.innerWidth, 480);
   const cell = Math.floor(cssWidth / map.width);
-  const sizePx = cell * map.width;
+  const widthPx = cell * map.width;
+  const heightPx = cell * map.height;
   const dpr = window.devicePixelRatio || 1;
-  canvas.style.width = `${sizePx}px`;
-  canvas.style.height = `${sizePx}px`;
-  canvas.width = Math.floor(sizePx * dpr);
-  canvas.height = Math.floor(sizePx * dpr);
+  canvas.style.width = `${widthPx}px`;
+  canvas.style.height = `${heightPx}px`;
+  canvas.width = Math.floor(widthPx * dpr);
+  canvas.height = Math.floor(heightPx * dpr);
   const ctx = canvas.getContext("2d")!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return cell;
@@ -208,7 +209,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   const now = performance.now();
 
   ctx.fillStyle = PALETTE.BG;
-  ctx.fillRect(0, 0, cssW, cssW);
+  ctx.fillRect(0, 0, cssW, mapHeightPx);
 
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
