@@ -27,6 +27,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm test
+
       - run: npm run build -- --base "/${{ github.event.repository.name }}/"
 
       - uses: actions/configure-pages@v5
