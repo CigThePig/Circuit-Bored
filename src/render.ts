@@ -183,24 +183,34 @@ const PALETTE = {
   FLOAT_STROKE: "rgba(0, 0, 0, 0.85)",
 } as const;
 
-type Geom = { px: number; py: number; cell: number };
+const ctxCache = new WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>();
+
+function getCtx(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
+  let ctx = ctxCache.get(canvas);
+  if (!ctx) {
+    ctx = canvas.getContext("2d")!;
+    ctxCache.set(canvas, ctx);
+  }
+  return ctx;
+}
 
 export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
   const cssWidth = Math.min(window.innerWidth, 480);
   const cell = Math.floor(cssWidth / map.width);
-  const sizePx = cell * map.width;
+  const widthPx = cell * map.width;
+  const heightPx = cell * map.height;
   const dpr = window.devicePixelRatio || 1;
-  canvas.style.width = `${sizePx}px`;
-  canvas.style.height = `${sizePx}px`;
-  canvas.width = Math.floor(sizePx * dpr);
-  canvas.height = Math.floor(sizePx * dpr);
-  const ctx = canvas.getContext("2d")!;
+  canvas.style.width = `${widthPx}px`;
+  canvas.style.height = `${heightPx}px`;
+  canvas.width = Math.floor(widthPx * dpr);
+  canvas.height = Math.floor(heightPx * dpr);
+  const ctx = getCtx(canvas);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return cell;
 }
 
 export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
-  const ctx = canvas.getContext("2d")!;
+  const ctx = getCtx(canvas);
   const map = state.map;
   const cssW = parseFloat(canvas.style.width || `${canvas.width}`);
   const cell = cssW / map.width;
@@ -208,25 +218,25 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   const now = performance.now();
 
   ctx.fillStyle = PALETTE.BG;
-  ctx.fillRect(0, 0, cssW, cssW);
+  ctx.fillRect(0, 0, cssW, mapHeightPx);
 
   for (let y = 0; y < map.height; y++) {
+    const py = y * cell;
     for (let x = 0; x < map.width; x++) {
       const t = map.tiles[y * map.width + x];
-      const g: Geom = { px: x * cell, py: y * cell, cell };
+      const px = x * cell;
       if (t === "wall") {
-        drawWallTile(ctx, g, x, y);
+        drawWallTile(ctx, px, py, cell, x, y);
       } else if (t === "half_cover") {
-        drawHalfCoverTile(ctx, g, x, y);
+        drawHalfCoverTile(ctx, px, py, cell, x, y);
       } else {
-        drawFloorTile(ctx, g, x, y);
+        drawFloorTile(ctx, px, py, cell, x, y);
       }
     }
   }
 
   for (const h of state.highlights) {
-    const g: Geom = { px: h.x * cell, py: h.y * cell, cell };
-    drawHighlight(ctx, g, h.fill, h.border);
+    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border);
   }
 
   if (state.sightLines && state.sightLines.length > 0) {
@@ -237,9 +247,8 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
 
   for (const u of map.units) {
     if (u.hp <= 0) continue;
-    const g: Geom = { px: u.x * cell, py: u.y * cell, cell };
     const isSelected = state.selected !== null && state.selected.id === u.id;
-    drawUnit(ctx, g, u, isSelected, mapHeightPx, map, now);
+    drawUnit(ctx, u.x * cell, u.y * cell, cell, u, isSelected, mapHeightPx, map, now);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
@@ -256,8 +265,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   }
 
   for (const p of state.enemyPreviews) {
-    const g: Geom = { px: p.x * cell, py: p.y * cell, cell };
-    drawEnemyPreview(ctx, g, p, mapHeightPx);
+    drawEnemyPreview(ctx, p.x * cell, p.y * cell, cell, p, mapHeightPx);
   }
 
   for (const t of state.floatingTexts) {
@@ -359,12 +367,13 @@ function fillAndStroke(
 
 function drawUnitSilhouette(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   u: Unit,
   bodyColor: string,
   visual: UnitVisualState,
 ): void {
-  const { px, py, cell } = g;
   const cx = px + cell / 2;
   const cy = py + cell / 2;
   const facing = u.team === "player" ? 1 : -1;
@@ -545,11 +554,12 @@ function drawUnitSilhouette(
 
 function drawFloorTile(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   x: number,
   y: number,
 ): void {
-  const { px, py, cell } = g;
   ctx.fillStyle = PALETTE.FLOOR_BASE;
   ctx.fillRect(px, py, cell, cell);
   ctx.strokeStyle = PALETTE.FLOOR_RIM;
@@ -597,11 +607,12 @@ function drawFloorTile(
 
 function drawWallTile(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   x: number,
   y: number,
 ): void {
-  const { px, py, cell } = g;
   ctx.fillStyle = PALETTE.WALL_BASE;
   ctx.fillRect(px, py, cell, cell);
 
@@ -651,12 +662,13 @@ function drawWallTile(
 
 function drawHalfCoverTile(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   x: number,
   y: number,
 ): void {
-  drawFloorTile(ctx, g, x, y);
-  const { px, py, cell } = g;
+  drawFloorTile(ctx, px, py, cell, x, y);
   const inset = Math.max(2, Math.floor(cell * 0.18));
   const ox = px + inset;
   const oy = py + inset;
@@ -692,23 +704,14 @@ function drawHalfCoverTile(
   }
 }
 
-function drawHighlight(
+function drawCornerBrackets(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
-  fill: string,
-  border: string,
+  px: number,
+  py: number,
+  cell: number,
+  len: number,
+  inset: number,
 ): void {
-  const { px, py, cell } = g;
-  ctx.save();
-  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
-  ctx.fillStyle = fill;
-  ctx.fillRect(px, py, cell, cell);
-  ctx.restore();
-
-  const len = Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN));
-  const inset = 1.5;
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(px + inset, py + inset + len);
   ctx.lineTo(px + inset, py + inset);
@@ -723,6 +726,25 @@ function drawHighlight(
   ctx.lineTo(px + cell - inset, py + cell - inset);
   ctx.lineTo(px + cell - inset, py + cell - inset - len);
   ctx.stroke();
+}
+
+function drawHighlight(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  fill: string,
+  border: string,
+): void {
+  ctx.save();
+  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
+  ctx.fillStyle = fill;
+  ctx.fillRect(px, py, cell, cell);
+  ctx.restore();
+
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 2;
+  drawCornerBrackets(ctx, px, py, cell, Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN)), 1.5);
 }
 
 function drawSightLine(
@@ -760,14 +782,15 @@ function drawSightLine(
 
 function drawUnit(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   u: Unit,
   isSelected: boolean,
   mapHeightPx: number,
   map: GameMap,
   nowMs: number,
 ): void {
-  const { px, py, cell } = g;
   const cx = px + cell / 2;
   const cy = py + cell / 2;
   const fresh = u.ap === u.maxAp;
@@ -808,7 +831,7 @@ function drawUnit(
     ctx.restore();
   }
 
-  drawUnitSilhouette(ctx, g, u, bodyColor, visual);
+  drawUnitSilhouette(ctx, px, py, cell, u, bodyColor, visual);
 
   if (u.overwatch) {
     const ringR = cell * 0.42;
@@ -840,37 +863,26 @@ function drawUnit(
   }
 
   if (isSelected) {
-    const len = Math.max(4, Math.floor(cell * 0.22));
-    const inset = 2;
-
     ctx.save();
     ctx.shadowColor = PALETTE.SELECTED_GLOW;
     ctx.shadowBlur = 4;
     ctx.strokeStyle = PALETTE.SELECTED;
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(px + inset, py + inset + len);
-    ctx.lineTo(px + inset, py + inset);
-    ctx.lineTo(px + inset + len, py + inset);
-    ctx.moveTo(px + cell - inset - len, py + inset);
-    ctx.lineTo(px + cell - inset, py + inset);
-    ctx.lineTo(px + cell - inset, py + inset + len);
-    ctx.moveTo(px + inset, py + cell - inset - len);
-    ctx.lineTo(px + inset, py + cell - inset);
-    ctx.lineTo(px + inset + len, py + cell - inset);
-    ctx.moveTo(px + cell - inset - len, py + cell - inset);
-    ctx.lineTo(px + cell - inset, py + cell - inset);
-    ctx.lineTo(px + cell - inset, py + cell - inset - len);
-    ctx.stroke();
+    drawCornerBrackets(ctx, px, py, cell, Math.max(4, Math.floor(cell * 0.22)), 2);
     ctx.restore();
   }
 
-  drawHpChip(ctx, g, u);
-  drawApPips(ctx, g, u, mapHeightPx);
+  drawHpChip(ctx, px, py, cell, u);
+  drawApPips(ctx, px, py, cell, u, mapHeightPx);
 }
 
-function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
-  const { px, py, cell } = g;
+function drawHpChip(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  u: Unit,
+): void {
   const fontSize = Math.max(8, Math.floor(cell * 0.30));
   const text = `${u.hp}`;
   ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
@@ -897,11 +909,12 @@ function drawHpChip(ctx: CanvasRenderingContext2D, g: Geom, u: Unit): void {
 
 function drawApPips(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   u: Unit,
   mapHeightPx: number,
 ): void {
-  const { px, py, cell } = g;
   const pipCount = u.maxAp;
   if (pipCount <= 0) return;
   const cx = px + cell / 2;
@@ -1087,11 +1100,12 @@ function drawShieldIcon(
 
 function drawEnemyPreview(
   ctx: CanvasRenderingContext2D,
-  g: Geom,
+  px: number,
+  py: number,
+  cell: number,
   p: EnemyPreview,
   mapHeightPx: number,
 ): void {
-  const { px, py, cell } = g;
   const text = `${p.hitPct}%`;
   const fontSize = Math.max(8, Math.floor(cell * 0.28));
   ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;

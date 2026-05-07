@@ -37,11 +37,18 @@ function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
 }
 
+function livingPlayers(map: GameMap): Unit[] {
+  const out: Unit[] = [];
+  for (const u of map.units) {
+    if (u.team === "player" && u.hp > 0) out.push(u);
+  }
+  return out;
+}
+
 function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
   let best: Unit | null = null;
   let bestDist = Infinity;
-  for (const u of map.units) {
-    if (u.team !== "player" || u.hp <= 0) continue;
+  for (const u of livingPlayers(map)) {
     const d = manhattan(enemy.x, enemy.y, u.x, u.y);
     if (d < bestDist) {
       bestDist = d;
@@ -53,8 +60,7 @@ function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
 
 function visiblePlayers(map: GameMap, enemy: Unit): Unit[] {
   const out: Unit[] = [];
-  for (const u of map.units) {
-    if (u.team !== "player" || u.hp <= 0) continue;
+  for (const u of livingPlayers(map)) {
     if (canShootTarget(map, enemy, u).canShoot) out.push(u);
   }
   return out;
@@ -226,8 +232,7 @@ function scoreCandidate(
     score += AI_SCORE_ADJACENT_ALLY * adjacentAllyCount(map, enemy, candidate.x, candidate.y);
 
     let exposed = false;
-    for (const p of map.units) {
-      if (p.team !== "player" || p.hp <= 0) continue;
+    for (const p of livingPlayers(map)) {
       if (!hasStrictLineOfSight(map, p.x, p.y, candidate.x, candidate.y)) continue;
       const coverFromP = targetCoverPenalty(map, p, enemy);
       if (coverFromP === 0) {
@@ -278,21 +283,18 @@ export function takeEnemyAction(
 
   // Re-check shoot now using current LoS and current AP.
   if (enemy.ap >= SHOOT_AP_COST) {
-    if (canShootTarget(map, enemy, target).canShoot) {
-      enemy.ap -= SHOOT_AP_COST;
-      const result = resolveShot(map, enemy, target);
-      return { kind: "shoot", target, result };
-    }
     const visible = visiblePlayers(map, enemy);
     if (visible.length > 0) {
-      // Pick the visible player with the best hit chance.
-      let best = visible[0];
+      // Prefer the persisted target if it's still visible; otherwise pick
+      // the visible player with the best hit chance.
+      let best = visible.includes(target) ? target : visible[0];
       let bestPenalty = shotHitPenalty(map, enemy, best);
-      for (let i = 1; i < visible.length; i++) {
-        const p = shotHitPenalty(map, enemy, visible[i]);
-        if (p < bestPenalty) {
-          bestPenalty = p;
-          best = visible[i];
+      for (const p of visible) {
+        if (p === best) continue;
+        const penalty = shotHitPenalty(map, enemy, p);
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty;
+          best = p;
         }
       }
       enemy.ap -= SHOOT_AP_COST;

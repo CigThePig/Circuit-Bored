@@ -54,7 +54,7 @@ export function startRuntime(
   const startupReport = validateMap(map);
   logReport("runtime startup", startupReport);
 
-  const lifecycle = { cancelled: false };
+  let cancelled = false;
   const aiSession = createAiSession();
 
   let selected: Unit | null = null;
@@ -104,6 +104,19 @@ export function startRuntime(
   hud.appendChild(apLabel);
   hud.appendChild(row);
 
+  // Cleared at the start of every redraw and used to skip duplicate
+  // hasShotLineOfSight calls within a single frame.
+  const losCache = new Map<string, boolean>();
+  const cachedLos = (ax: number, ay: number, bx: number, by: number): boolean => {
+    const key = `${ax},${ay}|${bx},${by}`;
+    let v = losCache.get(key);
+    if (v === undefined) {
+      v = hasShotLineOfSight(map, ax, ay, bx, by);
+      losCache.set(key, v);
+    }
+    return v;
+  };
+
   const computeOverlays = () => {
     state.coverIndicators = [];
     state.threatMarkers = [];
@@ -115,7 +128,7 @@ export function startRuntime(
       let seesAny = false;
       for (const p of map.units) {
         if (p.team !== "player" || p.hp <= 0) continue;
-        if (hasShotLineOfSight(map, e.x, e.y, p.x, p.y)) {
+        if (cachedLos(e.x, e.y, p.x, p.y)) {
           seesAny = true;
           break;
         }
@@ -152,7 +165,7 @@ export function startRuntime(
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
-      if (hasShotLineOfSight(map, selected.x, selected.y, e.x, e.y)) {
+      if (cachedLos(selected.x, selected.y, e.x, e.y)) {
         state.sightLines!.push({
           fromX: selected.x,
           fromY: selected.y,
@@ -189,7 +202,7 @@ export function startRuntime(
     if (selected.ap >= 2) {
       for (const u of map.units) {
         if (u.team !== "enemy" || u.hp <= 0) continue;
-        if (!hasShotLineOfSight(map, selected.x, selected.y, u.x, u.y)) continue;
+        if (!cachedLos(selected.x, selected.y, u.x, u.y)) continue;
         state.highlights.push({
           x: u.x,
           y: u.y,
@@ -236,10 +249,10 @@ export function startRuntime(
   };
 
   const redraw = () => {
+    losCache.clear();
     state.selected = selected;
     computeHighlights();
     computeOverlays();
-    state.floatingTexts = floatingTexts.filter((t) => t.expiresAt > performance.now());
     draw(canvas, state);
     updateHud();
   };
@@ -346,7 +359,7 @@ export function startRuntime(
       redraw();
       checkOutcome();
       await delay(350);
-      if (lifecycle.cancelled) return;
+      if (cancelled) return;
       break;
     }
   };
@@ -355,13 +368,13 @@ export function startRuntime(
     busy = true;
     updateHud();
     await delay(500);
-    if (lifecycle.cancelled) return;
+    if (cancelled) return;
     const enemies = map.units.filter((u) => u.team === "enemy" && u.hp > 0);
     for (const enemy of enemies) {
-      if (lifecycle.cancelled) return;
+      if (cancelled) return;
       beginEnemyTurn(map, enemy, aiSession);
       while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
-        if (lifecycle.cancelled) return;
+        if (cancelled) return;
         const action = takeEnemyAction(map, enemy, aiSession);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
@@ -374,19 +387,19 @@ export function startRuntime(
           checkOutcome();
           if (outcome !== null) break;
           await delay(350);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
         } else if (action.kind === "move") {
           redraw();
           await delay(350);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
           await triggerOverwatchReactions(enemy, action.from, action.to);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
           if (outcome !== null) break;
         }
       }
       if (outcome !== null) break;
     }
-    if (lifecycle.cancelled) return;
+    if (cancelled) return;
     if (outcome === null) {
       turn = "player";
       for (const u of map.units) {
@@ -458,7 +471,7 @@ export function startRuntime(
 
   return {
     destroy: () => {
-      lifecycle.cancelled = true;
+      cancelled = true;
       detachTap();
       cancelAnimationFrame(rafId);
       clearTimeout(bannerFadeTimer);

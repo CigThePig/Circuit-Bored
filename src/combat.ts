@@ -54,17 +54,27 @@ export function hasLineOfSight(
   return true;
 }
 
+type StrictLineStep = {
+  x: number;
+  y: number;
+  /** When this step is a diagonal, the two off-diagonal corner tiles. */
+  diagCorner1: { x: number; y: number } | null;
+  diagCorner2: { x: number; y: number } | null;
+};
+
 /**
- * Returns the tiles traversed by a strict line from (ax,ay) to (bx,by),
- * including the start and end points. Tiles are listed in order.
+ * Walks a supercover line from (ax,ay) to (bx,by), yielding each tile after
+ * the start (the start itself is excluded - callers add it if needed). On a
+ * diagonal step the yielded record carries the two off-diagonal corner tiles
+ * the line crosses; otherwise both corner fields are null.
  */
-export function getLineTilesStrict(
+function* strictLineSteps(
   ax: number,
   ay: number,
   bx: number,
   by: number,
-): { x: number; y: number }[] {
-  const points: { x: number; y: number }[] = [];
+): Generator<StrictLineStep> {
+  if (ax === bx && ay === by) return;
   const dx = Math.abs(bx - ax);
   const dy = -Math.abs(by - ay);
   const sx = ax < bx ? 1 : -1;
@@ -72,10 +82,13 @@ export function getLineTilesStrict(
   let err = dx + dy;
   let x = ax;
   let y = ay;
-  points.push({ x, y });
   while (x !== bx || y !== by) {
     const e2 = 2 * err;
+    let corner1: { x: number; y: number } | null = null;
+    let corner2: { x: number; y: number } | null = null;
     if (e2 >= dy && e2 <= dx) {
+      corner1 = { x: x + sx, y: y };
+      corner2 = { x: x, y: y + sy };
       err += dy;
       x += sx;
       err += dx;
@@ -87,7 +100,23 @@ export function getLineTilesStrict(
       err += dx;
       y += sy;
     }
-    points.push({ x, y });
+    yield { x, y, diagCorner1: corner1, diagCorner2: corner2 };
+  }
+}
+
+/**
+ * Returns the tiles traversed by a strict line from (ax,ay) to (bx,by),
+ * including the start and end points. Tiles are listed in order.
+ */
+export function getLineTilesStrict(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { x: number; y: number }[] {
+  const points: { x: number; y: number }[] = [{ x: ax, y: ay }];
+  for (const step of strictLineSteps(ax, ay, bx, by)) {
+    points.push({ x: step.x, y: step.y });
   }
   return points;
 }
@@ -108,42 +137,22 @@ export function hasStrictLineOfSight(
 ): boolean {
   if (!inBounds(map, ax, ay) || !inBounds(map, bx, by)) return false;
   if (ax === bx && ay === by) return true;
-  const dx = Math.abs(bx - ax);
-  const dy = -Math.abs(by - ay);
-  const sx = ax < bx ? 1 : -1;
-  const sy = ay < by ? 1 : -1;
-  let err = dx + dy;
-  let x = ax;
-  let y = ay;
-  while (x !== bx || y !== by) {
-    const e2 = 2 * err;
-    if (e2 >= dy && e2 <= dx) {
-      // Diagonal step: the line crosses the shared corner of four tiles.
-      // Strict policy: any wall at either off-diagonal corner blocks.
-      const cx1 = x + sx;
-      const cy1 = y;
-      const cx2 = x;
-      const cy2 = y + sy;
-      const cornerBlocks =
-        !inBounds(map, cx1, cy1) ||
-        !inBounds(map, cx2, cy2) ||
-        getTile(map, cx1, cy1) === "wall" ||
-        getTile(map, cx2, cy2) === "wall";
-      if (cornerBlocks) return false;
-      err += dy;
-      x += sx;
-      err += dx;
-      y += sy;
-    } else if (e2 >= dy) {
-      err += dy;
-      x += sx;
-    } else {
-      err += dx;
-      y += sy;
+  for (const step of strictLineSteps(ax, ay, bx, by)) {
+    if (step.diagCorner1) {
+      const c1 = step.diagCorner1;
+      const c2 = step.diagCorner2!;
+      if (
+        !inBounds(map, c1.x, c1.y) ||
+        !inBounds(map, c2.x, c2.y) ||
+        getTile(map, c1.x, c1.y) === "wall" ||
+        getTile(map, c2.x, c2.y) === "wall"
+      ) {
+        return false;
+      }
     }
-    if (x === bx && y === by) break;
-    if (!inBounds(map, x, y)) return false;
-    if (getTile(map, x, y) === "wall") return false;
+    if (step.x === bx && step.y === by) break;
+    if (!inBounds(map, step.x, step.y)) return false;
+    if (getTile(map, step.x, step.y) === "wall") return false;
   }
   return true;
 }
@@ -161,42 +170,22 @@ export function firstBlockingTilesStrict(
 ): { x: number; y: number }[] {
   if (!inBounds(map, ax, ay) || !inBounds(map, bx, by)) return [];
   if (ax === bx && ay === by) return [];
-  const dx = Math.abs(bx - ax);
-  const dy = -Math.abs(by - ay);
-  const sx = ax < bx ? 1 : -1;
-  const sy = ay < by ? 1 : -1;
-  let err = dx + dy;
-  let x = ax;
-  let y = ay;
-  while (x !== bx || y !== by) {
-    const e2 = 2 * err;
-    if (e2 >= dy && e2 <= dx) {
-      const cx1 = x + sx;
-      const cy1 = y;
-      const cx2 = x;
-      const cy2 = y + sy;
+  for (const step of strictLineSteps(ax, ay, bx, by)) {
+    if (step.diagCorner1) {
+      const c1 = step.diagCorner1;
+      const c2 = step.diagCorner2!;
       const blockers: { x: number; y: number }[] = [];
-      if (!inBounds(map, cx1, cy1) || getTile(map, cx1, cy1) === "wall") {
-        blockers.push({ x: cx1, y: cy1 });
+      if (!inBounds(map, c1.x, c1.y) || getTile(map, c1.x, c1.y) === "wall") {
+        blockers.push(c1);
       }
-      if (!inBounds(map, cx2, cy2) || getTile(map, cx2, cy2) === "wall") {
-        blockers.push({ x: cx2, y: cy2 });
+      if (!inBounds(map, c2.x, c2.y) || getTile(map, c2.x, c2.y) === "wall") {
+        blockers.push(c2);
       }
       if (blockers.length > 0) return blockers;
-      err += dy;
-      x += sx;
-      err += dx;
-      y += sy;
-    } else if (e2 >= dy) {
-      err += dy;
-      x += sx;
-    } else {
-      err += dx;
-      y += sy;
     }
-    if (x === bx && y === by) break;
-    if (!inBounds(map, x, y) || getTile(map, x, y) === "wall") {
-      return [{ x, y }];
+    if (step.x === bx && step.y === by) break;
+    if (!inBounds(map, step.x, step.y) || getTile(map, step.x, step.y) === "wall") {
+      return [{ x: step.x, y: step.y }];
     }
   }
   return [];
@@ -530,16 +519,7 @@ export function resolveShot(
   rng: () => number = Math.random,
 ): ShotResult {
   const shot = canShootTarget(map, shooter, target);
-  const cover = shot.canShoot && shot.targetExposure && target.peekExposure
-    ? targetCoverPenalty(map, shooter, {
-        ...target,
-        x: target.peekExposure.x,
-        y: target.peekExposure.y,
-      })
-    : targetCoverPenalty(map, shooter, target);
-  const penalty = shot.canShoot
-    ? (shot.mode === "peek" ? cover + PEEK_PENALTY : cover)
-    : Infinity;
+  const penalty = shot.canShoot ? shotHitPenalty(map, shooter, target) : Infinity;
   const hadCover = penalty > 0;
   const hitChance = Math.max(0, BASE_HIT - penalty);
   const roll = rng();

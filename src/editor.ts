@@ -67,35 +67,30 @@ export function startEditor(
 
   resizeCanvasForMap(canvas, map);
 
+  const toggleUnitAt = (x: number, y: number, team: "player" | "enemy"): void => {
+    const t = map.tiles[y * map.width + x];
+    if (t === "wall" || t === "half_cover") return;
+    const existing = unitAt(map, x, y);
+    if (existing && existing.team === team) {
+      map.units = map.units.filter((u) => u !== existing);
+    } else if (!existing) {
+      map.units.push(makeUnit(team, x, y));
+    }
+  };
+
   const detachTap = attachTapHandler(canvas, () => map, ({ x, y }) => {
     if (tool === "floor") {
       setTile(map, x, y, "floor");
     } else if (tool === "wall") {
-      const u = unitAt(map, x, y);
-      if (u) return;
+      if (unitAt(map, x, y)) return;
       setTile(map, x, y, "wall");
     } else if (tool === "half_cover") {
-      const u = unitAt(map, x, y);
-      if (u) return;
+      if (unitAt(map, x, y)) return;
       setTile(map, x, y, "half_cover");
     } else if (tool === "player") {
-      const t = map.tiles[y * map.width + x];
-      if (t === "wall" || t === "half_cover") return;
-      const existing = unitAt(map, x, y);
-      if (existing && existing.team === "player") {
-        map.units = map.units.filter((u) => u !== existing);
-      } else if (!existing) {
-        map.units.push(makeUnit("player", x, y));
-      }
+      toggleUnitAt(x, y, "player");
     } else if (tool === "enemy") {
-      const t = map.tiles[y * map.width + x];
-      if (t === "wall" || t === "half_cover") return;
-      const existing = unitAt(map, x, y);
-      if (existing && existing.team === "enemy") {
-        map.units = map.units.filter((u) => u !== existing);
-      } else if (!existing) {
-        map.units.push(makeUnit("enemy", x, y));
-      }
+      toggleUnitAt(x, y, "enemy");
     }
     redraw();
   });
