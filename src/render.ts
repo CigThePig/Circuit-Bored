@@ -704,24 +704,14 @@ function drawHalfCoverTile(
   }
 }
 
-function drawHighlight(
+function drawCornerBrackets(
   ctx: CanvasRenderingContext2D,
   px: number,
   py: number,
   cell: number,
-  fill: string,
-  border: string,
+  len: number,
+  inset: number,
 ): void {
-  ctx.save();
-  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
-  ctx.fillStyle = fill;
-  ctx.fillRect(px, py, cell, cell);
-  ctx.restore();
-
-  const len = Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN));
-  const inset = 1.5;
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(px + inset, py + inset + len);
   ctx.lineTo(px + inset, py + inset);
@@ -736,6 +726,25 @@ function drawHighlight(
   ctx.lineTo(px + cell - inset, py + cell - inset);
   ctx.lineTo(px + cell - inset, py + cell - inset - len);
   ctx.stroke();
+}
+
+function drawHighlight(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  fill: string,
+  border: string,
+): void {
+  ctx.save();
+  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
+  ctx.fillStyle = fill;
+  ctx.fillRect(px, py, cell, cell);
+  ctx.restore();
+
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 2;
+  drawCornerBrackets(ctx, px, py, cell, Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN)), 1.5);
 }
 
 function drawSightLine(
@@ -854,28 +863,12 @@ function drawUnit(
   }
 
   if (isSelected) {
-    const len = Math.max(4, Math.floor(cell * 0.22));
-    const inset = 2;
-
     ctx.save();
     ctx.shadowColor = PALETTE.SELECTED_GLOW;
     ctx.shadowBlur = 4;
     ctx.strokeStyle = PALETTE.SELECTED;
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(px + inset, py + inset + len);
-    ctx.lineTo(px + inset, py + inset);
-    ctx.lineTo(px + inset + len, py + inset);
-    ctx.moveTo(px + cell - inset - len, py + inset);
-    ctx.lineTo(px + cell - inset, py + inset);
-    ctx.lineTo(px + cell - inset, py + inset + len);
-    ctx.moveTo(px + inset, py + cell - inset - len);
-    ctx.lineTo(px + inset, py + cell - inset);
-    ctx.lineTo(px + inset + len, py + cell - inset);
-    ctx.moveTo(px + cell - inset - len, py + cell - inset);
-    ctx.lineTo(px + cell - inset, py + cell - inset);
-    ctx.lineTo(px + cell - inset, py + cell - inset - len);
-    ctx.stroke();
+    drawCornerBrackets(ctx, px, py, cell, Math.max(4, Math.floor(cell * 0.22)), 2);
     ctx.restore();
   }
 

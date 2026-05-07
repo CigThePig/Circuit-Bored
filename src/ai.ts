@@ -37,11 +37,18 @@ function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
 }
 
+function livingPlayers(map: GameMap): Unit[] {
+  const out: Unit[] = [];
+  for (const u of map.units) {
+    if (u.team === "player" && u.hp > 0) out.push(u);
+  }
+  return out;
+}
+
 function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
   let best: Unit | null = null;
   let bestDist = Infinity;
-  for (const u of map.units) {
-    if (u.team !== "player" || u.hp <= 0) continue;
+  for (const u of livingPlayers(map)) {
     const d = manhattan(enemy.x, enemy.y, u.x, u.y);
     if (d < bestDist) {
       bestDist = d;
@@ -53,8 +60,7 @@ function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
 
 function visiblePlayers(map: GameMap, enemy: Unit): Unit[] {
   const out: Unit[] = [];
-  for (const u of map.units) {
-    if (u.team !== "player" || u.hp <= 0) continue;
+  for (const u of livingPlayers(map)) {
     if (canShootTarget(map, enemy, u).canShoot) out.push(u);
   }
   return out;
@@ -226,8 +232,7 @@ function scoreCandidate(
     score += AI_SCORE_ADJACENT_ALLY * adjacentAllyCount(map, enemy, candidate.x, candidate.y);
 
     let exposed = false;
-    for (const p of map.units) {
-      if (p.team !== "player" || p.hp <= 0) continue;
+    for (const p of livingPlayers(map)) {
       if (!hasStrictLineOfSight(map, p.x, p.y, candidate.x, candidate.y)) continue;
       const coverFromP = targetCoverPenalty(map, p, enemy);
       if (coverFromP === 0) {

@@ -54,7 +54,7 @@ export function startRuntime(
   const startupReport = validateMap(map);
   logReport("runtime startup", startupReport);
 
-  const lifecycle = { cancelled: false };
+  let cancelled = false;
   const aiSession = createAiSession();
 
   let selected: Unit | null = null;
@@ -359,7 +359,7 @@ export function startRuntime(
       redraw();
       checkOutcome();
       await delay(350);
-      if (lifecycle.cancelled) return;
+      if (cancelled) return;
       break;
     }
   };
@@ -368,13 +368,13 @@ export function startRuntime(
     busy = true;
     updateHud();
     await delay(500);
-    if (lifecycle.cancelled) return;
+    if (cancelled) return;
     const enemies = map.units.filter((u) => u.team === "enemy" && u.hp > 0);
     for (const enemy of enemies) {
-      if (lifecycle.cancelled) return;
+      if (cancelled) return;
       beginEnemyTurn(map, enemy, aiSession);
       while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
-        if (lifecycle.cancelled) return;
+        if (cancelled) return;
         const action = takeEnemyAction(map, enemy, aiSession);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
@@ -387,19 +387,19 @@ export function startRuntime(
           checkOutcome();
           if (outcome !== null) break;
           await delay(350);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
         } else if (action.kind === "move") {
           redraw();
           await delay(350);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
           await triggerOverwatchReactions(enemy, action.from, action.to);
-          if (lifecycle.cancelled) return;
+          if (cancelled) return;
           if (outcome !== null) break;
         }
       }
       if (outcome !== null) break;
     }
-    if (lifecycle.cancelled) return;
+    if (cancelled) return;
     if (outcome === null) {
       turn = "player";
       for (const u of map.units) {
@@ -471,7 +471,7 @@ export function startRuntime(
 
   return {
     destroy: () => {
-      lifecycle.cancelled = true;
+      cancelled = true;
       detachTap();
       cancelAnimationFrame(rafId);
       clearTimeout(bannerFadeTimer);
