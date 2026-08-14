@@ -5,6 +5,8 @@ type ViewMode = "normal" | "grayscale" | "contrast" | "squint";
 type BackdropMode = "dark" | "light";
 
 const scenes = buildVisualScenes();
+const STATIC_RENDER_TIME_MS = 0;
+const PRODUCTION_CANVAS_FILTER = "saturate(1.08) contrast(1.035)";
 const canvases = new Map<string, HTMLCanvasElement>();
 const sceneGrid = requiredElement<HTMLElement>("scene-grid");
 const cellInput = requiredElement<HTMLInputElement>("cell-size");
@@ -67,6 +69,8 @@ function sceneState(scene: VisualScene): RenderState {
   if (overlayInput.checked) return scene.state;
   return {
     ...scene.state,
+    selected: null,
+    showUnitUi: false,
     highlights: [],
     enemyPreviews: [],
     floatingTexts: [],
@@ -89,11 +93,11 @@ function sizeCanvas(canvas: HTMLCanvasElement, state: RenderState, cell: number)
   canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function drawScene(scene: VisualScene, resize: boolean): void {
+function drawScene(scene: VisualScene, resize: boolean, nowMs = animateInput.checked ? performance.now() : STATIC_RENDER_TIME_MS): void {
   const canvas = canvases.get(scene.id);
   if (!canvas) return;
   if (resize) sizeCanvas(canvas, scene.state, Number(cellInput.value));
-  draw(canvas, sceneState(scene));
+  draw(canvas, sceneState(scene), nowMs);
 }
 
 function renderAll(resize = true): void {
@@ -112,7 +116,8 @@ function animationLoop(): void {
     animationFrame = 0;
     return;
   }
-  for (const scene of scenes) drawScene(scene, false);
+  const nowMs = performance.now();
+  for (const scene of scenes) drawScene(scene, false, nowMs);
   animationFrame = requestAnimationFrame(animationLoop);
 }
 
@@ -126,10 +131,10 @@ function updateAnimation(): void {
 }
 
 function filterForView(): string {
-  if (viewSelect.value === "grayscale") return "grayscale(1)";
-  if (viewSelect.value === "contrast") return "grayscale(1) contrast(1.85)";
-  if (viewSelect.value === "squint") return "grayscale(1) contrast(1.3) blur(3px)";
-  return "none";
+  if (viewSelect.value === "grayscale") return `${PRODUCTION_CANVAS_FILTER} grayscale(1)`;
+  if (viewSelect.value === "contrast") return `${PRODUCTION_CANVAS_FILTER} grayscale(1) contrast(1.85)`;
+  if (viewSelect.value === "squint") return `${PRODUCTION_CANVAS_FILTER} grayscale(1) contrast(1.3) blur(3px)`;
+  return PRODUCTION_CANVAS_FILTER;
 }
 
 function processedCanvas(source: HTMLCanvasElement): HTMLCanvasElement {

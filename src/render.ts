@@ -98,6 +98,8 @@ export type SightLine = {
 export type RenderState = {
   map: GameMap;
   selected: Unit | null;
+  /** Hide gameplay UI while keeping the board and unit artwork visible. */
+  showUnitUi?: boolean;
   highlights: {
     x: number;
     y: number;
@@ -230,13 +232,13 @@ export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): num
   return cell;
 }
 
-export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
+export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = performance.now()): void {
   const ctx = getCtx(canvas);
   const map = state.map;
   const cssW = parseFloat(canvas.style.width || `${canvas.width}`);
   const cell = cssW / map.width;
   const mapHeightPx = cell * map.height;
-  const now = performance.now();
+  const now = nowMs;
 
   ctx.fillStyle = PALETTE.BG;
   ctx.fillRect(0, 0, cssW, mapHeightPx);
@@ -269,7 +271,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   for (const u of map.units) {
     if (u.hp <= 0) continue;
     const isSelected = state.selected !== null && state.selected.id === u.id;
-    drawUnit(ctx, u.x * cell, u.y * cell, cell, u, isSelected, mapHeightPx, map, now);
+    drawUnit(ctx, u.x * cell, u.y * cell, cell, u, isSelected, mapHeightPx, map, now, state.showUnitUi !== false);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
@@ -1052,6 +1054,7 @@ function drawUnit(
   mapHeightPx: number,
   map: GameMap,
   nowMs: number,
+  showUnitUi: boolean,
 ): void {
   const cx = px + cell / 2;
   const cy = py + cell / 2;
@@ -1069,7 +1072,7 @@ function drawUnit(
 
   const visual = computeUnitVisualState(map, u, nowMs);
 
-  if (fresh && !spent && u.team === "player") {
+  if (showUnitUi && fresh && !spent && u.team === "player") {
     ctx.save();
     ctx.shadowColor = PALETTE.FRESH_GLOW_PLAYER;
     ctx.shadowBlur = Math.max(3, Math.floor(cell * 0.12));
@@ -1093,7 +1096,7 @@ function drawUnit(
   drawUnitSilhouette(ctx, px, py, cell, u, bodyColor, visual);
   drawArchetypeBadge(ctx, px, py, cell, u);
 
-  if (u.overwatch) {
+  if (showUnitUi && u.overwatch) {
     const ringR = cell * 0.38;
     ctx.save();
     ctx.shadowColor = PALETTE.OVERWATCH;
@@ -1115,7 +1118,7 @@ function drawUnit(
     ctx.restore();
   }
 
-  if (isSelected) {
+  if (showUnitUi && isSelected) {
     ctx.save();
     ctx.shadowColor = PALETTE.SELECTED_GLOW;
     ctx.shadowBlur = cell * 0.16;
@@ -1129,8 +1132,10 @@ function drawUnit(
     ctx.restore();
   }
 
-  drawHpChip(ctx, px, py, cell, u);
-  drawApPips(ctx, px, py, cell, u, mapHeightPx);
+  if (showUnitUi) {
+    drawHpChip(ctx, px, py, cell, u);
+    drawApPips(ctx, px, py, cell, u, mapHeightPx);
+  }
 }
 
 function drawArchetypeBadge(

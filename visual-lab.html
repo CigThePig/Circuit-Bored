@@ -91,10 +91,10 @@
           #071018;
         background-size: 18px 18px;
       }
-      canvas { display: block; max-width: none; box-shadow: 0 0 0 1px #314958, 0 14px 34px rgba(0,0,0,.42); transform-origin: top left; }
-      body[data-view="grayscale"] canvas { filter: grayscale(1); }
-      body[data-view="contrast"] canvas { filter: grayscale(1) contrast(1.85); }
-      body[data-view="squint"] canvas { filter: grayscale(1) contrast(1.3) blur(3px); }
+      canvas { display: block; max-width: none; box-shadow: 0 0 0 1px #314958, 0 14px 34px rgba(0,0,0,.42); transform-origin: top left; filter: saturate(1.08) contrast(1.035); }
+      body[data-view="grayscale"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1); }
+      body[data-view="contrast"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1) contrast(1.85); }
+      body[data-view="squint"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1) contrast(1.3) blur(3px); }
       body[data-backdrop="light"] .canvas-stage { background: #dbe5e8; }
       .reference {
         display: grid;
