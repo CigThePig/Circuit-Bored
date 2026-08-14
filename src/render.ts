@@ -117,20 +117,21 @@ export type RenderState = {
 const PALETTE = {
   BG: "#070b10",
 
-  FLOOR_BASE: "#151c24",
-  FLOOR_ALT: "#18222c",
-  FLOOR_RIM: "#263441",
+  FLOOR_BASE: "#101820",
+  FLOOR_ALT: "#131d26",
+  FLOOR_RIM: "#1d2b35",
   FLOOR_SEAM: "rgba(118, 155, 180, 0.16)",
   FLOOR_GLYPH: "rgba(101, 196, 220, 0.16)",
   FLOOR_WEAR: "rgba(3, 7, 10, 0.22)",
   FLOOR_LIGHT: "#45d8e8",
 
-  WALL_BASE: "#0c1219",
-  WALL_MID: "#17232d",
-  WALL_BEVEL_HI: "rgba(132, 205, 224, 0.26)",
-  WALL_BEVEL_LO: "rgba(0, 0, 0, 0.55)",
-  WALL_PANEL: "rgba(180, 225, 235, 0.10)",
-  WALL_BRACKET: "rgba(126, 215, 230, 0.36)",
+  WALL_BASE: "#111a22",
+  WALL_MID: "#2b414f",
+  WALL_FACE_ALT: "#263946",
+  WALL_BEVEL_HI: "#8fb8c3",
+  WALL_BEVEL_LO: "#05090d",
+  WALL_PANEL: "rgba(210, 240, 245, 0.18)",
+  WALL_BRACKET: "rgba(151, 226, 236, 0.52)",
   WALL_LIGHT: "#ff426d",
   WALL_PIPE: "#314453",
   WALL_PIPE_HI: "#6d8794",
@@ -249,7 +250,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
       const t = map.tiles[y * map.width + x];
       const px = x * cell;
       if (t === "wall") {
-        drawWallTile(ctx, px, py, cell, x, y);
+        drawWallTile(ctx, px, py, cell, x, y, map);
       } else if (t === "half_cover") {
         drawHalfCoverTile(ctx, px, py, cell, x, y);
       } else {
@@ -761,27 +762,85 @@ function drawWallTile(
   cell: number,
   x: number,
   y: number,
+  map: GameMap,
 ): void {
   const variant = environmentVariant("wall", x, y);
+  const north = getTile(map, x, y - 1) === "wall";
+  const east = getTile(map, x + 1, y) === "wall";
+  const south = getTile(map, x, y + 1) === "wall";
+  const west = getTile(map, x - 1, y) === "wall";
+  const exposedCount = Number(!north) + Number(!east) + Number(!south) + Number(!west);
+  const lip = Math.max(3, Math.round(cell * 0.12));
+  const seam = Math.max(1, Math.round(cell * 0.025));
+  const h = tileHash(x, y);
+
+  // Walls are rendered as a connected raised mass. Interior tile boundaries
+  // recede; only edges facing walkable space receive the strong light/dark
+  // profile that makes the structure read as impassable at a glance.
   ctx.fillStyle = PALETTE.WALL_BASE;
   ctx.fillRect(px, py, cell, cell);
+  ctx.fillStyle = (h & 1) === 0 ? PALETTE.WALL_MID : PALETTE.WALL_FACE_ALT;
+  ctx.fillRect(
+    px + (west ? 0 : lip),
+    py + (north ? 0 : lip),
+    cell - (west ? 0 : lip) - (east ? 0 : lip),
+    cell - (north ? 0 : lip) - (south ? 0 : lip),
+  );
 
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = PALETTE.WALL_BEVEL_HI;
+  if (!north) {
+    const top = ctx.createLinearGradient(0, py, 0, py + lip);
+    top.addColorStop(0, PALETTE.WALL_BEVEL_HI);
+    top.addColorStop(0.24, "#4f6f7b");
+    top.addColorStop(1, PALETTE.WALL_MID);
+    ctx.fillStyle = top;
+    ctx.fillRect(px, py, cell, lip);
+    ctx.fillStyle = "rgba(222,249,252,.72)";
+    ctx.fillRect(px, py, cell, seam);
+  } else {
+    ctx.fillStyle = "rgba(3,8,12,.34)";
+    ctx.fillRect(px, py, cell, seam);
+  }
+  if (!west) {
+    const left = ctx.createLinearGradient(px, 0, px + lip, 0);
+    left.addColorStop(0, "#648895");
+    left.addColorStop(1, PALETTE.WALL_MID);
+    ctx.fillStyle = left;
+    ctx.fillRect(px, py, lip, cell);
+    ctx.fillStyle = "rgba(192,235,241,.48)";
+    ctx.fillRect(px, py, seam, cell);
+  } else {
+    ctx.fillStyle = "rgba(3,8,12,.28)";
+    ctx.fillRect(px, py, seam, cell);
+  }
+  if (!south) {
+    const bottom = ctx.createLinearGradient(0, py + cell - lip, 0, py + cell);
+    bottom.addColorStop(0, PALETTE.WALL_MID);
+    bottom.addColorStop(1, PALETTE.WALL_BEVEL_LO);
+    ctx.fillStyle = bottom;
+    ctx.fillRect(px, py + cell - lip, cell, lip);
+    ctx.fillStyle = "rgba(0,0,0,.88)";
+    ctx.fillRect(px, py + cell - seam, cell, seam);
+  }
+  if (!east) {
+    const right = ctx.createLinearGradient(px + cell - lip, 0, px + cell, 0);
+    right.addColorStop(0, PALETTE.WALL_MID);
+    right.addColorStop(1, PALETTE.WALL_BEVEL_LO);
+    ctx.fillStyle = right;
+    ctx.fillRect(px + cell - lip, py, lip, cell);
+    ctx.fillStyle = "rgba(0,0,0,.78)";
+    ctx.fillRect(px + cell - seam, py, seam, cell);
+  }
+
+  ctx.save();
   ctx.beginPath();
-  ctx.moveTo(px + 0.5, py + cell - 1);
-  ctx.lineTo(px + 0.5, py + 0.5);
-  ctx.lineTo(px + cell - 1, py + 0.5);
-  ctx.stroke();
+  ctx.rect(
+    px + (west ? 0 : lip),
+    py + (north ? 0 : lip),
+    cell - (west ? 0 : lip) - (east ? 0 : lip),
+    cell - (north ? 0 : lip) - (south ? 0 : lip),
+  );
+  ctx.clip();
 
-  ctx.strokeStyle = PALETTE.WALL_BEVEL_LO;
-  ctx.beginPath();
-  ctx.moveTo(px + cell - 0.5, py + 1);
-  ctx.lineTo(px + cell - 0.5, py + cell - 0.5);
-  ctx.lineTo(px + 1, py + cell - 0.5);
-  ctx.stroke();
-
-  const h = tileHash(x, y);
   if (variant === "pipe_bank") {
     const vertical = (h & 1) === 0;
     const pipeW = Math.max(2, cell * 0.11);
@@ -827,23 +886,47 @@ function drawWallTile(
       ctx.stroke();
     }
   } else {
-    ctx.fillStyle = PALETTE.WALL_MID;
-    ctx.fillRect(px + cell * 0.12, py + cell * 0.12, cell * 0.76, cell * 0.76);
+    // Braces follow the wall run so neighboring tiles combine into one piece,
+    // rather than repeating the square-with-an-X language of floor hatches.
     ctx.strokeStyle = PALETTE.WALL_PANEL;
-    ctx.strokeRect(px + cell * 0.12 + 0.5, py + cell * 0.12 + 0.5, cell * 0.76 - 1, cell * 0.76 - 1);
+    ctx.lineWidth = Math.max(1, cell * 0.045);
     ctx.beginPath();
-    ctx.moveTo(px + cell * 0.12, py + cell * 0.12);
-    ctx.lineTo(px + cell * 0.88, py + cell * 0.88);
-    ctx.moveTo(px + cell * 0.88, py + cell * 0.12);
-    ctx.lineTo(px + cell * 0.12, py + cell * 0.88);
+    if ((west || east) && !(north || south)) {
+      ctx.moveTo(px, py + cell * 0.37);
+      ctx.lineTo(px + cell, py + cell * 0.37);
+      ctx.moveTo(px, py + cell * 0.63);
+      ctx.lineTo(px + cell, py + cell * 0.63);
+    } else if ((north || south) && !(west || east)) {
+      ctx.moveTo(px + cell * 0.37, py);
+      ctx.lineTo(px + cell * 0.37, py + cell);
+      ctx.moveTo(px + cell * 0.63, py);
+      ctx.lineTo(px + cell * 0.63, py + cell);
+    } else {
+      ctx.moveTo(px + cell * 0.18, py + cell * 0.50);
+      ctx.lineTo(px + cell * 0.82, py + cell * 0.50);
+      ctx.moveTo(px + cell * 0.50, py + cell * 0.18);
+      ctx.lineTo(px + cell * 0.50, py + cell * 0.82);
+    }
     ctx.stroke();
-    const hubR = cell * 0.09;
+    const hubR = cell * 0.075;
     ctx.fillStyle = PALETTE.WALL_BASE;
     ctx.beginPath();
     ctx.arc(px + cell / 2, py + cell / 2, hubR, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = PALETTE.WALL_BRACKET;
     ctx.stroke();
+  }
+  ctx.restore();
+
+  // Exposed corners get compact structural fasteners. They remain visible at
+  // 28 px without turning every wall tile into an icon.
+  if (exposedCount >= 2) {
+    const bolt = Math.max(1.5, cell * 0.035);
+    ctx.fillStyle = "rgba(205,238,242,.70)";
+    if (!north && !west) ctx.fillRect(px + lip * 0.42, py + lip * 0.42, bolt, bolt);
+    if (!north && !east) ctx.fillRect(px + cell - lip * 0.58 - bolt, py + lip * 0.42, bolt, bolt);
+    if (!south && !west) ctx.fillRect(px + lip * 0.42, py + cell - lip * 0.58 - bolt, bolt, bolt);
+    if (!south && !east) ctx.fillRect(px + cell - lip * 0.58 - bolt, py + cell - lip * 0.58 - bolt, bolt, bolt);
   }
 
   if ((h & 0x1f) === 0) {
