@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071019" />
+    <title>Circuit Bored · Visual Lab</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #071019;
+        --panel: #0e1822;
+        --panel-raised: #142330;
+        --line: #263b49;
+        --line-hot: #4bd8e9;
+        --text: #e7f0f4;
+        --muted: #8da5b2;
+        --cyan: #58e4f1;
+        --amber: #ffd166;
+        --red: #ff6677;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html { min-width: 320px; background: var(--bg); }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          linear-gradient(rgba(88,228,241,.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(88,228,241,.025) 1px, transparent 1px),
+          radial-gradient(circle at 30% -10%, #142b3b, var(--bg) 42%);
+        background-size: 24px 24px, 24px 24px, auto;
+      }
+      button, select, input { font: inherit; }
+      button, select {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        background: linear-gradient(#172734, #101b25);
+      }
+      button { padding: 8px 12px; cursor: pointer; }
+      button:hover, select:hover { border-color: var(--line-hot); }
+      button.primary { color: var(--cyan); border-color: rgba(88,228,241,.65); }
+      .shell { width: min(1440px, 100%); margin: 0 auto; padding: 24px; }
+      header { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: end; }
+      .eyebrow { color: var(--cyan); font: 800 11px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase; }
+      h1 { margin: 7px 0 8px; font-size: clamp(28px, 5vw, 54px); line-height: .95; letter-spacing: -.035em; }
+      .intro { max-width: 760px; margin: 0; color: var(--muted); line-height: 1.55; }
+      .dev-badge { align-self: start; padding: 8px 10px; border: 1px solid rgba(255,209,102,.45); color: var(--amber); font: 700 11px ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: end;
+        margin: 24px 0;
+        padding: 14px;
+        border: 1px solid var(--line);
+        background: rgba(9,17,24,.94);
+        box-shadow: 0 14px 40px rgba(0,0,0,.34);
+        backdrop-filter: blur(12px);
+      }
+      .control { display: grid; gap: 5px; }
+      .control label { color: var(--muted); font: 700 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+      .range-row { display: flex; gap: 8px; align-items: center; min-height: 38px; }
+      input[type="range"] { width: 150px; accent-color: var(--cyan); }
+      output { min-width: 44px; color: var(--cyan); font: 700 12px ui-monospace, monospace; }
+      .toggle { display: flex; gap: 8px; align-items: center; min-height: 38px; color: var(--text); }
+      .toolbar-actions { display: flex; gap: 8px; margin-left: auto; }
+      .scene-grid { display: grid; gap: 18px; }
+      .scene {
+        min-width: 0;
+        border: 1px solid var(--line);
+        background: linear-gradient(145deg, rgba(20,35,48,.96), rgba(8,14,20,.98));
+        box-shadow: 0 18px 42px rgba(0,0,0,.28);
+      }
+      .scene-head { display: grid; grid-template-columns: 1fr auto; gap: 16px; padding: 15px 16px; border-bottom: 1px solid var(--line); }
+      .scene-kicker { color: var(--cyan); font: 700 10px ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+      .scene h2 { margin: 4px 0; font-size: 18px; }
+      .scene p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .review { margin-top: 6px !important; color: #c6d8df !important; }
+      .canvas-stage {
+        overflow: auto;
+        padding: 18px;
+        background:
+          linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.025) 75%),
+          #071018;
+        background-size: 18px 18px;
+      }
+      canvas { display: block; max-width: none; box-shadow: 0 0 0 1px #314958, 0 14px 34px rgba(0,0,0,.42); transform-origin: top left; filter: saturate(1.08) contrast(1.035); }
+      body[data-view="grayscale"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1); }
+      body[data-view="contrast"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1) contrast(1.85); }
+      body[data-view="squint"] canvas { filter: saturate(1.08) contrast(1.035) grayscale(1) contrast(1.3) blur(3px); }
+      body[data-backdrop="light"] .canvas-stage { background: #dbe5e8; }
+      .reference {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .reference article { padding: 13px; border: 1px solid var(--line); background: rgba(9,16,23,.74); }
+      .reference strong { display: block; margin-bottom: 5px; color: var(--cyan); font-size: 12px; }
+      .reference span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+      footer { margin: 28px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+      kbd { padding: 2px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; color: var(--text); background: var(--panel); font: 700 10px ui-monospace, monospace; }
+      .status { min-height: 18px; margin-top: 10px; color: var(--cyan); font: 700 11px ui-monospace, monospace; }
+      @media (max-width: 760px) {
+        .shell { padding: 16px; }
+        header { grid-template-columns: 1fr; }
+        .toolbar-actions { width: 100%; margin-left: 0; }
+        .toolbar-actions button { flex: 1; }
+        .reference { grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+  <body data-view="normal" data-backdrop="dark">
+    <div class="shell">
+      <header>
+        <div>
+          <div class="eyebrow">Circuit Bored · renderer workbench</div>
+          <h1>Visual Laboratory</h1>
+          <p class="intro">A development-only surface using the real production renderer. It keeps canonical scenes stable so visual changes can be inspected, compared, exported, and reviewed without playing through a run.</p>
+        </div>
+        <div class="dev-badge">Not game UI</div>
+      </header>
+
+      <section class="toolbar" aria-label="Visual lab controls">
+        <div class="control">
+          <label for="cell-size">Cell size</label>
+          <div class="range-row">
+            <input id="cell-size" type="range" min="24" max="64" step="2" value="40" />
+            <output id="cell-output" for="cell-size">40 px</output>
+          </div>
+        </div>
+        <div class="control">
+          <label for="view-mode">Diagnostic view</label>
+          <select id="view-mode">
+            <option value="normal">Normal</option>
+            <option value="grayscale">Grayscale</option>
+            <option value="contrast">Value contrast</option>
+            <option value="squint">Squint test</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="backdrop-mode">Backdrop</label>
+          <select id="backdrop-mode">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </div>
+        <label class="toggle"><input id="show-overlays" type="checkbox" checked /> Show overlays</label>
+        <label class="toggle"><input id="animate" type="checkbox" /> Animate units</label>
+        <div class="toolbar-actions">
+          <button id="copy-diagnostics">Copy diagnostics</button>
+          <button id="export-sheet" class="primary">Export contact sheet</button>
+        </div>
+      </section>
+
+      <main id="scene-grid" class="scene-grid"></main>
+
+      <section class="reference" aria-label="Visual acceptance reminders">
+        <article><strong>Terrain mass</strong><span>Walls remain obviously impassable in grayscale and Squint mode.</span></article>
+        <article><strong>Minimum size</strong><span>Gameplay meaning survives at 28 px even when decoration drops out.</span></article>
+        <article><strong>Overlay priority</strong><span>Targets, threat, HP, AP, and cover never compete for the same space.</span></article>
+        <article><strong>Real composition</strong><span>The generated encounter remains readable, not merely the isolated samples.</span></article>
+      </section>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <footer>
+        Shortcuts: <kbd>1</kbd>–<kbd>4</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size and diagnostic settings.
+      </footer>
+    </div>
+    <script type="module" src="/tools/visual-lab.ts"></script>
+  </body>
+</html>

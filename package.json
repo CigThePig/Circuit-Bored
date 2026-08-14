@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:visual": "vite --open /visual-lab.html",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "preview:visual": "vite preview --open /visual-lab.html",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm run build",
+    "check:visual": "vitest run tests/render.test.ts tests/visual-lab.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
