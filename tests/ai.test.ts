@@ -132,6 +132,23 @@ describe("AI movement", () => {
     expect(log.some((a) => a.kind === "wait")).toBe(true);
   });
 
+  it("routes toward a reachable target-adjacent tile when an equal-distance option is blocked", () => {
+    const map = buildMap([
+      "#..",
+      ".#.",
+      "...",
+    ], [
+      { team: "player", x: 2, y: 1 },
+      { team: "enemy", x: 0, y: 1 },
+    ]);
+    const session = createAiSession();
+    const enemy = map.units[1];
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session);
+    expect(action.kind).toBe("move");
+    expect(enemy).toMatchObject({ x: 0, y: 2, ap: 3 });
+  });
+
   it("moving via the AI clears peekExposure", () => {
     // Enemy is fully blocked from the player by a wall column with no peek
     // option (perpendicular tiles are walls too) - so its only choice is to

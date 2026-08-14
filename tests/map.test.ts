@@ -7,7 +7,10 @@ import {
 import {
   UNIT_AP,
   UNIT_HP,
+  cloneMap,
   createTestMap,
+  loadMapWithReport,
+  saveMap,
   type GameMap,
 } from "../src/map.ts";
 import { buildMap } from "./fixtures.ts";
@@ -98,7 +101,7 @@ describe("validateMap", () => {
     expect(report.issues.some((i) => i.code === "UNIT_OUT_OF_BOUNDS")).toBe(true);
   });
 
-  it("warns UNIT_ON_BLOCKING_TILE for units placed on a wall", () => {
+  it("rejects units placed on a blocking tile", () => {
     const map = buildMap([
       "....",
       "..#.",
@@ -109,9 +112,9 @@ describe("validateMap", () => {
     const report = validateMap(map);
     const hit = report.issues.find((i) => i.code === "UNIT_ON_BLOCKING_TILE");
     expect(hit).toBeDefined();
-    expect(hit?.severity).toBe("warning");
-    // Warning level means errors should still be false (assuming no other errs).
-    expect(report.hasErrors).toBe(false);
+    expect(hit?.severity).toBe("error");
+    expect(report.hasErrors).toBe(true);
+    expect(canRunMap(map).ok).toBe(false);
   });
 
   it("flags NO_PLAYER_SPAWN when no player units exist", () => {
@@ -189,5 +192,51 @@ describe("sanitizeLoadedMap", () => {
     if (!result.map) return;
     expect(result.map.tiles[1]).toBe("floor");
     expect(result.report.issues.some((i) => i.code === "INVALID_TILE")).toBe(true);
+  });
+
+  it("rejects oversized maps before allocating their tile array", () => {
+    const raw = {
+      width: Number.MAX_SAFE_INTEGER,
+      height: Number.MAX_SAFE_INTEGER,
+      tiles: [],
+      units: [],
+    };
+    expect(() => sanitizeLoadedMap(raw)).not.toThrow();
+    const result = sanitizeLoadedMap(raw);
+    expect(result.map).toBeNull();
+    expect(result.report.issues.some((i) => i.code === "MAP_TOO_LARGE")).toBe(true);
+  });
+});
+
+describe("cloneMap", () => {
+  it("deep-clones transient peek exposure coordinates", () => {
+    const source = createTestMap();
+    source.units[0].peekExposure = { x: 4, y: 9 };
+    const copy = cloneMap(source);
+    copy.units[0].peekExposure!.x = 99;
+    expect(source.units[0].peekExposure).toEqual({ x: 4, y: 9 });
+  });
+});
+
+describe("browser storage failures", () => {
+  it("reports unavailable storage instead of throwing during load and save", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: () => { throw new DOMException("blocked", "SecurityError"); },
+        setItem: () => { throw new DOMException("blocked", "SecurityError"); },
+      },
+    });
+    try {
+      expect(() => loadMapWithReport()).not.toThrow();
+      const loaded = loadMapWithReport();
+      expect(loaded.map).toBeNull();
+      expect(loaded.report.issues[0]?.code).toBe("STORAGE_UNAVAILABLE");
+      expect(saveMap(createTestMap())).toBe(false);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+      else delete (globalThis as { localStorage?: Storage }).localStorage;
+    }
   });
 });

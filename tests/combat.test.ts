@@ -6,6 +6,7 @@ import {
   PEEK_PENALTY,
   canShootTarget,
   hasStrictLineOfSight,
+  previewShot,
   resolveShot,
   shotHitPenalty,
   targetCoverPenalty,
@@ -71,6 +72,16 @@ describe("hasStrictLineOfSight", () => {
       "...",
     ]);
     expect(hasStrictLineOfSight(map, 0, 0, 5, 5)).toBe(false);
+  });
+
+  it("is symmetric for shallow lines beside a wall", () => {
+    const map = buildMap([
+      "#.",
+      "..",
+      "..",
+    ]);
+    expect(hasStrictLineOfSight(map, 1, 0, 0, 2)).toBe(true);
+    expect(hasStrictLineOfSight(map, 0, 2, 1, 0)).toBe(true);
   });
 });
 
@@ -258,6 +269,9 @@ describe("shotHitPenalty", () => {
     expect(shot.mode).toBe("peek");
     expect(targetCoverPenalty(map, shooter, target)).toBe(0);
     expect(shotHitPenalty(map, shooter, target)).toBeCloseTo(PEEK_PENALTY, 5);
+    const preview = previewShot(map, shooter, target);
+    expect(preview.hitChance).toBeCloseTo(BASE_HIT - PEEK_PENALTY, 5);
+    expect(preview.hadCover).toBe(false);
   });
 
   it("adds PEEK_PENALTY on top of cover for a peek shot at a target with cover", () => {
@@ -389,6 +403,9 @@ describe("committed peek exposure", () => {
     const after = canShootTarget(map, target, shooter);
     expect(after.canShoot).toBe(true);
     expect(after.targetExposure).toBe(true);
+    const preview = previewShot(map, target, shooter);
+    expect(preview.shot.targetExposure).toBe(true);
+    expect(preview.targetPoint).toEqual({ x: 2, y: 2 });
   });
 
   it("damage from a shot through exposure applies to the real unit", () => {

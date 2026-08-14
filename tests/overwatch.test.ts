@@ -74,4 +74,20 @@ describe("overwatchShouldFire", () => {
     expect(overwatchShouldFire(map, watcher, mover, { x: 2, y: 0 }, { x: 3, y: 0 }))
       .toBe(false);
   });
+
+  it("evaluates old-position occupancy instead of reusing the destination map", () => {
+    // The wall makes (0,1) hidden because it is also the watcher's only peek
+    // tile. Moving to (1,1) creates direct sight and must trigger overwatch.
+    const map = buildMap([
+      "#..",
+      "...",
+      "...",
+    ]);
+    const watcher = unit({ team: "player", x: 1, y: 0, overwatch: true });
+    const mover = unit({ team: "enemy", x: 1, y: 1 });
+    map.units = [watcher, mover];
+    expect(overwatchShouldFire(map, watcher, mover, { x: 0, y: 1 }, { x: 1, y: 1 }))
+      .toBe(true);
+    expect(mover).toMatchObject({ x: 1, y: 1, peekExposure: null });
+  });
 });
