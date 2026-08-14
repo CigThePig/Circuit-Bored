@@ -75,30 +75,34 @@ function* strictLineSteps(
   by: number,
 ): Generator<StrictLineStep> {
   if (ax === bx && ay === by) return;
-  const dx = Math.abs(bx - ax);
-  const dy = -Math.abs(by - ay);
-  const sx = ax < bx ? 1 : -1;
-  const sy = ay < by ? 1 : -1;
-  let err = dx + dy;
+  const nx = Math.abs(bx - ax);
+  const ny = Math.abs(by - ay);
+  const sx = Math.sign(bx - ax);
+  const sy = Math.sign(by - ay);
+  let ix = 0;
+  let iy = 0;
   let x = ax;
   let y = ay;
-  while (x !== bx || y !== by) {
-    const e2 = 2 * err;
+  while (ix < nx || iy < ny) {
+    // Compare the next vertical and horizontal grid-boundary crossings.
+    // Unlike directional Bresenham tie-breaking, this traversal produces
+    // the same covered cells in either direction.
+    const decision = (1 + 2 * ix) * ny - (1 + 2 * iy) * nx;
     let corner1: { x: number; y: number } | null = null;
     let corner2: { x: number; y: number } | null = null;
-    if (e2 >= dy && e2 <= dx) {
+    if (decision === 0) {
       corner1 = { x: x + sx, y: y };
       corner2 = { x: x, y: y + sy };
-      err += dy;
       x += sx;
-      err += dx;
       y += sy;
-    } else if (e2 >= dy) {
-      err += dy;
+      ix += 1;
+      iy += 1;
+    } else if (decision < 0) {
       x += sx;
+      ix += 1;
     } else {
-      err += dx;
       y += sy;
+      iy += 1;
     }
     yield { x, y, diagCorner1: corner1, diagCorner2: corner2 };
   }
@@ -419,11 +423,26 @@ export function overwatchShouldFire(
 ): boolean {
   if (!watcher.overwatch) return false;
   if (watcher.hp <= 0) return false;
-  const moverFrom: Unit = { ...mover, x: from.x, y: from.y, peekExposure: null };
-  const moverTo: Unit = { ...mover, x: to.x, y: to.y, peekExposure: null };
-  const sawBefore = canShootTarget(map, watcher, moverFrom).canShoot;
-  const seesNow = canShootTarget(map, watcher, moverTo).canShoot;
-  return !sawBefore && seesNow;
+  const originalX = mover.x;
+  const originalY = mover.y;
+  const originalExposure = mover.peekExposure;
+  try {
+    // Occupancy is part of peek eligibility, so the mover must actually be
+    // relocated in the map for each snapshot. A detached Unit copy leaves
+    // unitAt() observing the destination during the "before" check.
+    mover.peekExposure = null;
+    mover.x = from.x;
+    mover.y = from.y;
+    const sawBefore = canShootTarget(map, watcher, mover).canShoot;
+    mover.x = to.x;
+    mover.y = to.y;
+    const seesNow = canShootTarget(map, watcher, mover).canShoot;
+    return !sawBefore && seesNow;
+  } finally {
+    mover.x = originalX;
+    mover.y = originalY;
+    mover.peekExposure = originalExposure;
+  }
 }
 
 /**
@@ -490,6 +509,16 @@ export function shotHitPenalty(
 ): number {
   const shot = canShootTarget(map, shooter, target);
   if (!shot.canShoot) return Infinity;
+  const cover = coverPenaltyForShot(map, shooter, target, shot);
+  return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
+}
+
+function coverPenaltyForShot(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+  shot: ShotLineResult,
+): number {
   let cover: number;
   if (shot.targetExposure && target.peekExposure) {
     // The target leaned out: cover is evaluated against the silhouette tile.
@@ -502,7 +531,38 @@ export function shotHitPenalty(
   } else {
     cover = targetCoverPenalty(map, shooter, target);
   }
-  return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
+  return cover;
+}
+
+export type ShotPreview = {
+  shot: ShotLineResult;
+  hitChance: number;
+  hadCover: boolean;
+  targetPoint: { x: number; y: number };
+};
+
+/** Single source of truth for UI previews and actual shot resolution. */
+export function previewShot(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+): ShotPreview {
+  const shot = canShootTarget(map, shooter, target);
+  const cover = shot.canShoot
+    ? coverPenaltyForShot(map, shooter, target, shot)
+    : 0;
+  const penalty = shot.canShoot
+    ? cover + (shot.mode === "peek" ? PEEK_PENALTY : 0)
+    : Infinity;
+  const targetPoint = shot.targetExposure && target.peekExposure
+    ? { ...target.peekExposure }
+    : { x: target.x, y: target.y };
+  return {
+    shot,
+    hitChance: Math.max(0, BASE_HIT - penalty),
+    hadCover: shot.canShoot && cover > 0,
+    targetPoint,
+  };
 }
 
 export type ShotResult = {
@@ -518,10 +578,8 @@ export function resolveShot(
   target: Unit,
   rng: () => number = Math.random,
 ): ShotResult {
-  const shot = canShootTarget(map, shooter, target);
-  const penalty = shot.canShoot ? shotHitPenalty(map, shooter, target) : Infinity;
-  const hadCover = penalty > 0;
-  const hitChance = Math.max(0, BASE_HIT - penalty);
+  const preview = previewShot(map, shooter, target);
+  const { shot, hitChance, hadCover } = preview;
   const roll = rng();
   const hit = roll < hitChance;
   const damage = hit ? SHOT_DAMAGE : 0;

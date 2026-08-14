@@ -48,7 +48,7 @@ export function inBounds(map: GameMap, x: number, y: number): boolean {
 
 export function getTile(map: GameMap, x: number, y: number): TileType | null {
   if (!inBounds(map, x, y)) return null;
-  return map.tiles[idx(map, x, y)];
+  return map.tiles[idx(map, x, y)] ?? null;
 }
 
 export function setTile(map: GameMap, x: number, y: number, t: TileType): void {
@@ -99,12 +99,20 @@ export function cloneMap(map: GameMap): GameMap {
     width: map.width,
     height: map.height,
     tiles: [...map.tiles],
-    units: map.units.map((u) => ({ ...u })),
+    units: map.units.map((u) => ({
+      ...u,
+      peekExposure: u.peekExposure ? { ...u.peekExposure } : null,
+    })),
   };
 }
 
-export function saveMap(map: GameMap): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+export function saveMap(map: GameMap): boolean {
+  try {
+    globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadMap(): GameMap | null {
@@ -116,7 +124,22 @@ export function loadMapWithReport(): {
   map: GameMap | null;
   report: ValidationReport;
 } {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  let raw: string | null;
+  try {
+    raw = globalThis.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return {
+      map: null,
+      report: {
+        issues: [{
+          severity: "error",
+          code: "STORAGE_UNAVAILABLE",
+          message: "Saved maps are unavailable in this browser context.",
+        }],
+        hasErrors: true,
+      },
+    };
+  }
   if (!raw) {
     return { map: null, report: { issues: [], hasErrors: false } };
   }

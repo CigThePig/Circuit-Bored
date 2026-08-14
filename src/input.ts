@@ -23,23 +23,28 @@ export function attachTapHandler(
 
   let downX = 0;
   let downY = 0;
-  let isDown = false;
+  let activePointerId: number | null = null;
 
   const onPointerDown = (e: PointerEvent) => {
-    isDown = true;
+    if (activePointerId !== null) return;
+    activePointerId = e.pointerId;
     downX = e.clientX;
     downY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
   };
   const onPointerUp = (e: PointerEvent) => {
-    if (!isDown) return;
-    isDown = false;
+    if (e.pointerId !== activePointerId) return;
+    activePointerId = null;
+    if (canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
     const dx = e.clientX - downX;
     const dy = e.clientY - downY;
     if (Math.hypot(dx, dy) > 12) return;
     handler(e.clientX, e.clientY);
   };
-  const onPointerCancel = () => {
-    isDown = false;
+  const onPointerCancel = (e: PointerEvent) => {
+    if (e.pointerId === activePointerId) activePointerId = null;
   };
 
   canvas.addEventListener("pointerdown", onPointerDown);

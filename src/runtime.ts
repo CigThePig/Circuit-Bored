@@ -14,12 +14,11 @@ import {
   type RenderState,
 } from "./render.ts";
 import {
-  BASE_HIT,
   canShootTarget,
-  hasShotLineOfSight,
   overwatchShouldFire,
+  previewShot,
   resolveShot,
-  shotHitPenalty,
+  type ShotPreview,
 } from "./combat.ts";
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 import { createAiSession } from "./aiSession.ts";
@@ -104,15 +103,15 @@ export function startRuntime(
   hud.appendChild(apLabel);
   hud.appendChild(row);
 
-  // Cleared at the start of every redraw and used to skip duplicate
-  // hasShotLineOfSight calls within a single frame.
-  const losCache = new Map<string, boolean>();
-  const cachedLos = (ax: number, ay: number, bx: number, by: number): boolean => {
-    const key = `${ax},${ay}|${bx},${by}`;
-    let v = losCache.get(key);
-    if (v === undefined) {
-      v = hasShotLineOfSight(map, ax, ay, bx, by);
-      losCache.set(key, v);
+  // Cleared at the start of every redraw so targeting overlays and combat
+  // resolution share the same cover, peek, and exposure rules.
+  const previewCache = new Map<string, ShotPreview>();
+  const cachedPreview = (shooter: Unit, target: Unit): ShotPreview => {
+    const key = `${shooter.id}|${target.id}`;
+    let v = previewCache.get(key);
+    if (!v) {
+      v = previewShot(map, shooter, target);
+      previewCache.set(key, v);
     }
     return v;
   };
@@ -128,7 +127,7 @@ export function startRuntime(
       let seesAny = false;
       for (const p of map.units) {
         if (p.team !== "player" || p.hp <= 0) continue;
-        if (cachedLos(e.x, e.y, p.x, p.y)) {
+        if (cachedPreview(e, p).shot.canShoot) {
           seesAny = true;
           break;
         }
@@ -165,13 +164,14 @@ export function startRuntime(
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
-      if (cachedLos(selected.x, selected.y, e.x, e.y)) {
+      const preview = cachedPreview(selected, e);
+      if (preview.shot.canShoot) {
         state.sightLines!.push({
-          fromX: selected.x,
-          fromY: selected.y,
-          toX: e.x,
-          toY: e.y,
-          hasCover: shotHitPenalty(map, selected, e) > 0,
+          fromX: preview.shot.from.x,
+          fromY: preview.shot.from.y,
+          toX: preview.targetPoint.x,
+          toY: preview.targetPoint.y,
+          hasCover: preview.hadCover,
         });
       }
     }
@@ -202,20 +202,19 @@ export function startRuntime(
     if (selected.ap >= 2) {
       for (const u of map.units) {
         if (u.team !== "enemy" || u.hp <= 0) continue;
-        if (!cachedLos(selected.x, selected.y, u.x, u.y)) continue;
+        const preview = cachedPreview(selected, u);
+        if (!preview.shot.canShoot) continue;
         state.highlights.push({
           x: u.x,
           y: u.y,
           fill: "rgba(255, 80, 80, 0.55)",
           border: "rgba(255, 80, 80, 1)",
         });
-        const penalty = shotHitPenalty(map, selected, u);
-        const hitChance = Math.max(0, BASE_HIT - penalty);
         state.enemyPreviews.push({
           x: u.x,
           y: u.y,
-          hitPct: Math.round(hitChance * 100),
-          hasCover: penalty > 0,
+          hitPct: Math.round(preview.hitChance * 100),
+          hasCover: preview.hadCover,
         });
       }
     }
@@ -249,7 +248,7 @@ export function startRuntime(
   };
 
   const redraw = () => {
-    losCache.clear();
+    previewCache.clear();
     state.selected = selected;
     computeHighlights();
     computeOverlays();
@@ -446,6 +445,7 @@ export function startRuntime(
 
   let rafId = 0;
   const tick = () => {
+    if (cancelled) return;
     if (floatingTexts.length > 0) {
       const now = performance.now();
       for (let i = floatingTexts.length - 1; i >= 0; i--) {
@@ -455,7 +455,11 @@ export function startRuntime(
     // Always repaint while a match is live so the unit idle bob and other
     // time-based effects (threat pulse, peek lean) stay smooth.
     if (outcome === null) redraw();
-    rafId = requestAnimationFrame(tick);
+    if (outcome === null || floatingTexts.length > 0) {
+      rafId = requestAnimationFrame(tick);
+    } else {
+      rafId = 0;
+    }
   };
   rafId = requestAnimationFrame(tick);
 

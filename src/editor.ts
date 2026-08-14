@@ -136,8 +136,9 @@ export function startEditor(
   const saveBtn = document.createElement("button");
   saveBtn.textContent = "Save";
   saveBtn.addEventListener("click", () => {
-    saveMap(map);
-    status.textContent = "Saved.";
+    status.textContent = saveMap(map)
+      ? "Saved."
+      : "Save unavailable in this browser.";
   });
 
   const loadBtn = document.createElement("button");

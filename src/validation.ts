@@ -27,6 +27,9 @@ const VALID_TEAMS: ReadonlySet<Unit["team"]> = new Set<Unit["team"]>([
   "enemy",
 ]);
 
+export const MAX_MAP_DIMENSION = 128;
+export const MAX_MAP_CELLS = 16_384;
+
 function isFiniteNonNegativeInt(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && Number.isInteger(n) && n >= 0;
 }
@@ -58,19 +61,33 @@ export function validateMap(map: GameMap): ValidationReport {
   if (!isFiniteNonNegativeInt(map.height) || map.height <= 0) {
     pushError(issues, "INVALID_HEIGHT", `Map height must be a positive integer (got ${String(map.height)}).`);
   }
+  const validDimensions =
+    isFiniteNonNegativeInt(map.width) && map.width > 0 &&
+    isFiniteNonNegativeInt(map.height) && map.height > 0;
+  const cellCount = validDimensions ? map.width * map.height : 0;
+  const supportedDimensions =
+    validDimensions &&
+    map.width <= MAX_MAP_DIMENSION &&
+    map.height <= MAX_MAP_DIMENSION &&
+    Number.isSafeInteger(cellCount) &&
+    cellCount <= MAX_MAP_CELLS;
+  if (validDimensions && !supportedDimensions) {
+    pushError(
+      issues,
+      "MAP_TOO_LARGE",
+      `Map dimensions ${map.width}x${map.height} exceed the supported limit of ` +
+        `${MAX_MAP_DIMENSION} per side and ${MAX_MAP_CELLS} total cells.`,
+    );
+  }
   if (!Array.isArray(map.tiles)) {
     pushError(issues, "MISSING_TILES", "Map.tiles must be an array.");
-  } else if (
-    isFiniteNonNegativeInt(map.width) &&
-    isFiniteNonNegativeInt(map.height) &&
-    map.tiles.length !== map.width * map.height
-  ) {
+  } else if (supportedDimensions && map.tiles.length !== cellCount) {
     pushError(
       issues,
       "TILE_LENGTH_MISMATCH",
       `Tile array length (${map.tiles.length}) does not match width*height (${map.width * map.height}).`,
     );
-  } else {
+  } else if (supportedDimensions) {
     for (let i = 0; i < map.tiles.length; i++) {
       const t = map.tiles[i] as unknown;
       if (typeof t !== "string" || !VALID_TILES.has(t as TileType)) {
@@ -138,7 +155,7 @@ export function validateMap(map: GameMap): ValidationReport {
     } else {
       const t = tileForUnit(u);
       if (t === "wall" || t === "half_cover") {
-        pushWarning(
+        pushError(
           issues,
           "UNIT_ON_BLOCKING_TILE",
           `Unit '${u.id}' is on a ${t} tile at (${u.x}, ${u.y}).`,
@@ -262,20 +279,35 @@ export function sanitizeLoadedMap(raw: unknown): {
     pushError(issues, "INVALID_HEIGHT", `Saved map has invalid height ${String(height)}.`);
     return { map: null, report: { issues, hasErrors: true } };
   }
+  const cellCount = width * height;
+  if (
+    width > MAX_MAP_DIMENSION ||
+    height > MAX_MAP_DIMENSION ||
+    !Number.isSafeInteger(cellCount) ||
+    cellCount > MAX_MAP_CELLS
+  ) {
+    pushError(
+      issues,
+      "MAP_TOO_LARGE",
+      `Saved map dimensions ${width}x${height} exceed the supported limit of ` +
+        `${MAX_MAP_DIMENSION} per side and ${MAX_MAP_CELLS} total cells.`,
+    );
+    return { map: null, report: { issues, hasErrors: true } };
+  }
   if (!Array.isArray(raw.tiles)) {
     pushError(issues, "MISSING_TILES", "Saved map is missing a tiles array.");
     return { map: null, report: { issues, hasErrors: true } };
   }
-  if (raw.tiles.length !== width * height) {
+  if (raw.tiles.length !== cellCount) {
     pushError(
       issues,
       "TILE_LENGTH_MISMATCH",
-      `Saved tile array length ${raw.tiles.length} does not match ${width * height}.`,
+      `Saved tile array length ${raw.tiles.length} does not match ${cellCount}.`,
     );
     return { map: null, report: { issues, hasErrors: true } };
   }
 
-  const tiles: TileType[] = new Array(width * height);
+  const tiles: TileType[] = new Array(cellCount);
   for (let i = 0; i < tiles.length; i++) {
     const t = raw.tiles[i];
     if (typeof t === "string" && VALID_TILES.has(t as TileType)) {

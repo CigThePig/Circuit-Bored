@@ -74,13 +74,18 @@ type AStarNode = {
   parent: AStarNode | null;
 };
 
-function aStarNextStep(
+type AStarRoute = {
+  next: { x: number; y: number };
+  distance: number;
+};
+
+function aStarRoute(
   map: GameMap,
   sx: number,
   sy: number,
   tx: number,
   ty: number,
-): { x: number; y: number } | null {
+): AStarRoute | null {
   if (sx === tx && sy === ty) return null;
 
   const passable = (x: number, y: number): boolean => {
@@ -118,7 +123,7 @@ function aStarNextStep(
       let n: AStarNode = cur;
       while (n.parent && n.parent.parent) n = n.parent;
       if (!n.parent) return null;
-      return { x: n.x, y: n.y };
+      return { next: { x: n.x, y: n.y }, distance: cur.g };
     }
 
     for (const d of DIRS) {
@@ -318,28 +323,34 @@ export function takeEnemyAction(
   // If the best candidate is the current tile, fall back to A* toward an open
   // tile adjacent to the target (never the target's own tile).
   let stepTarget = bestCandidate;
+  let plannedStep: { x: number; y: number } | null = null;
   if (!stepTarget || (stepTarget.x === enemy.x && stepTarget.y === enemy.y)) {
     const adjacents = DIRS
       .map((d) => ({ x: target.x + d.dx, y: target.y + d.dy }))
       .filter((p) => isPassable(map, p.x, p.y));
-    let bestAdj: { x: number; y: number } | null = null;
-    let bestAdjDist = Infinity;
+    let bestRoute: AStarRoute | null = null;
     for (const a of adjacents) {
-      const d = manhattan(enemy.x, enemy.y, a.x, a.y);
-      if (d < bestAdjDist) {
-        bestAdjDist = d;
-        bestAdj = a;
+      const route = aStarRoute(map, enemy.x, enemy.y, a.x, a.y);
+      if (route && (!bestRoute || route.distance < bestRoute.distance)) {
+        bestRoute = route;
       }
     }
-    if (!bestAdj) return { kind: "wait" };
-    stepTarget = { x: bestAdj.x, y: bestAdj.y, steps: bestAdjDist };
+    if (!bestRoute) return { kind: "wait" };
+    plannedStep = bestRoute.next;
+    stepTarget = { x: plannedStep.x, y: plannedStep.y, steps: 1 };
   }
 
   if (stepTarget.x === enemy.x && stepTarget.y === enemy.y) {
     return { kind: "wait" };
   }
 
-  const step = aStarNextStep(map, enemy.x, enemy.y, stepTarget.x, stepTarget.y);
+  const step = plannedStep ?? aStarRoute(
+    map,
+    enemy.x,
+    enemy.y,
+    stepTarget.x,
+    stepTarget.y,
+  )?.next;
   if (!step) return { kind: "wait" };
   if (!isPassable(map, step.x, step.y)) return { kind: "wait" };
 

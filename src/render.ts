@@ -195,8 +195,8 @@ function getCtx(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
-  const cssWidth = Math.min(window.innerWidth, 480);
-  const cell = Math.floor(cssWidth / map.width);
+  const cssWidth = Math.max(1, Math.min(window.innerWidth, 480));
+  const cell = Math.max(1, Math.floor(cssWidth / map.width));
   const widthPx = cell * map.width;
   const heightPx = cell * map.height;
   const dpr = window.devicePixelRatio || 1;
