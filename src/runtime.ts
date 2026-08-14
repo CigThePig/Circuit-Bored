@@ -23,9 +23,21 @@ import {
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 import { createAiSession } from "./aiSession.ts";
 import { logReport, validateMap } from "./validation.ts";
+import { movementApCost, resetTurnState } from "./rules.ts";
 
-type Turn = "player" | "enemy";
-type Outcome = "victory" | "defeat" | null;
+export type Turn = "player" | "enemy";
+export type EncounterOutcome = "victory" | "defeat";
+type Outcome = EncounterOutcome | null;
+
+export type RuntimeOptions = {
+  preserveUnitState?: boolean;
+  initialTurn?: Turn;
+  random?: () => number;
+  onStateChange?: (map: GameMap, turn: Turn) => void;
+  onComplete?: (outcome: EncounterOutcome, map: GameMap) => void;
+  exitLabel?: string;
+  completionLabel?: string;
+};
 
 export type RuntimeHandle = {
   destroy: () => void;
@@ -41,13 +53,21 @@ export function startRuntime(
   banner: HTMLElement,
   sourceMap: GameMap,
   onExit: () => void,
+  options: RuntimeOptions = {},
 ): RuntimeHandle {
   const map = cloneMap(sourceMap);
   for (const u of map.units) {
-    u.hp = u.maxHp;
-    u.ap = u.maxAp;
-    u.overwatch = false;
-    u.peekExposure = null;
+    if (!options.preserveUnitState) {
+      u.hp = u.maxHp;
+      u.ap = u.maxAp;
+      u.overwatch = false;
+      u.peekExposure = null;
+      u.movesThisTurn = 0;
+      u.shotsThisTurn = 0;
+      u.killsThisTurn = 0;
+      u.encounterShots = 0;
+    }
+    u.resolvingOverwatch = false;
   }
 
   const startupReport = validateMap(map);
@@ -57,11 +77,13 @@ export function startRuntime(
   const aiSession = createAiSession();
 
   let selected: Unit | null = null;
-  let turn: Turn = "player";
+  let turn: Turn = options.initialTurn ?? "player";
   let outcome: Outcome = null;
   let busy = false;
 
   const floatingTexts: FloatingText[] = [];
+  const random = options.random ?? Math.random;
+  const notifyState = () => options.onStateChange?.(cloneMap(map), turn);
 
   const state: RenderState = {
     map,
@@ -80,6 +102,8 @@ export function startRuntime(
   turnLabel.className = "status";
   const apLabel = document.createElement("div");
   apLabel.className = "status";
+  const enemyLabel = document.createElement("div");
+  enemyLabel.className = "status";
 
   const overwatchBtn = document.createElement("button");
   overwatchBtn.textContent = "Overwatch";
@@ -89,7 +113,7 @@ export function startRuntime(
   endTurnBtn.className = "primary";
 
   const exitBtn = document.createElement("button");
-  exitBtn.textContent = "Quit";
+  exitBtn.textContent = options.exitLabel ?? "Quit";
   exitBtn.addEventListener("click", () => onExit());
 
   const row = document.createElement("div");
@@ -101,6 +125,7 @@ export function startRuntime(
   hud.innerHTML = "";
   hud.appendChild(turnLabel);
   hud.appendChild(apLabel);
+  hud.appendChild(enemyLabel);
   hud.appendChild(row);
 
   // Cleared at the start of every redraw so targeting overlays and combat
@@ -181,7 +206,8 @@ export function startRuntime(
     state.highlights = [];
     state.enemyPreviews = [];
     if (!selected || turn !== "player") return;
-    if (selected.ap >= 1) {
+    const moveCost = movementApCost(selected);
+    if (selected.ap >= moveCost) {
       const adj = [
         { x: selected.x + 1, y: selected.y },
         { x: selected.x - 1, y: selected.y },
@@ -223,10 +249,18 @@ export function startRuntime(
   const updateHud = () => {
     turnLabel.textContent = turn === "player" ? "Your turn" : "Enemy turn";
     if (selected && selected.hp > 0) {
-      apLabel.textContent = `Selected: HP ${selected.hp}/${selected.maxHp}  AP ${selected.ap}/${selected.maxAp}`;
+      const name = selected.displayName ? `${selected.displayName} · ` : "";
+      apLabel.textContent = `${name}HP ${selected.hp}/${selected.maxHp}  AP ${selected.ap}/${selected.maxAp}`;
     } else {
       apLabel.textContent = "No unit selected. Tap one of your units.";
     }
+    const enemyCounts = new Map<string, number>();
+    for (const unit of map.units) {
+      if (unit.team !== "enemy" || unit.hp <= 0) continue;
+      const name = unit.displayName ?? "Enemy";
+      enemyCounts.set(name, (enemyCounts.get(name) ?? 0) + 1);
+    }
+    enemyLabel.textContent = `Hostiles: ${[...enemyCounts].map(([name, count]) => `${count} ${name}`).join(" · ") || "none"}`;
     endTurnBtn.disabled = turn !== "player" || outcome !== null || busy;
     const livePlayers = map.units.filter((u) => u.team === "player" && u.hp > 0);
     const allSpent =
@@ -289,6 +323,7 @@ export function startRuntime(
     else if (!playerAlive) outcome = "defeat";
     if (outcome) {
       overlayText.textContent = outcome === "victory" ? "VICTORY" : "DEFEAT";
+      overlayButton.textContent = options.completionLabel ?? (outcome === "victory" ? "Continue" : "Run Report");
       overlay.classList.remove("hidden", "victory", "defeat");
       overlay.classList.add(outcome === "victory" ? "victory" : "defeat");
     }
@@ -315,7 +350,7 @@ export function startRuntime(
         return;
       }
       selected.ap -= 2;
-      const result = resolveShot(map, selected, tappedUnit);
+      const result = resolveShot(map, selected, tappedUnit, random);
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, tappedUnit.x, tappedUnit.y, "#ffd83a");
       } else {
@@ -324,18 +359,24 @@ export function startRuntime(
       if (selected.ap <= 0) selected = null;
       redraw();
       checkOutcome();
+      notifyState();
       redraw();
       return;
     }
 
     const dx = Math.abs(x - selected.x);
     const dy = Math.abs(y - selected.y);
-    if (dx + dy === 1 && isPassable(map, x, y) && selected.ap > 0) {
+    const moveCost = movementApCost(selected);
+    if (dx + dy === 1 && isPassable(map, x, y) && selected.ap >= moveCost) {
+      const from = { x: selected.x, y: selected.y };
       selected.x = x;
       selected.y = y;
-      selected.ap -= 1;
+      selected.ap -= moveCost;
+      selected.movesThisTurn = (selected.movesThisTurn ?? 0) + 1;
       selected.peekExposure = null;
+      triggerEnemyOverwatchReactions(selected, from, { x, y });
       if (selected.ap <= 0) selected = null;
+      notifyState();
       redraw();
     }
   });
@@ -348,7 +389,9 @@ export function startRuntime(
     for (const p of map.units) {
       if (p.team !== "player" || p.hp <= 0) continue;
       if (!overwatchShouldFire(map, p, enemy, from, to)) continue;
-      const result = resolveShot(map, p, enemy);
+      p.resolvingOverwatch = true;
+      const result = resolveShot(map, p, enemy, random);
+      p.resolvingOverwatch = false;
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, enemy.x, enemy.y, "#ffd83a");
       } else {
@@ -357,8 +400,27 @@ export function startRuntime(
       p.overwatch = false;
       redraw();
       checkOutcome();
+      notifyState();
       await delay(350);
       if (cancelled) return;
+      break;
+    }
+  };
+
+  const triggerEnemyOverwatchReactions = (
+    player: Unit,
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ) => {
+    for (const enemy of map.units) {
+      if (enemy.team !== "enemy" || enemy.hp <= 0) continue;
+      if (!overwatchShouldFire(map, enemy, player, from, to)) continue;
+      enemy.resolvingOverwatch = true;
+      const result = resolveShot(map, enemy, player, random);
+      enemy.resolvingOverwatch = false;
+      enemy.overwatch = false;
+      addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
+      checkOutcome();
       break;
     }
   };
@@ -374,7 +436,7 @@ export function startRuntime(
       beginEnemyTurn(map, enemy, aiSession);
       while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
         if (cancelled) return;
-        const action = takeEnemyAction(map, enemy, aiSession);
+        const action = takeEnemyAction(map, enemy, aiSession, random);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
           if (action.result.hit) {
@@ -384,6 +446,7 @@ export function startRuntime(
           }
           redraw();
           checkOutcome();
+          notifyState();
           if (outcome !== null) break;
           await delay(350);
           if (cancelled) return;
@@ -393,7 +456,13 @@ export function startRuntime(
           if (cancelled) return;
           await triggerOverwatchReactions(enemy, action.from, action.to);
           if (cancelled) return;
+          notifyState();
           if (outcome !== null) break;
+        } else if (action.kind === "overwatch") {
+          addFloating("WATCH", enemy.x, enemy.y, "#ff5a5a");
+          redraw();
+          notifyState();
+          break;
         }
       }
       if (outcome !== null) break;
@@ -403,14 +472,13 @@ export function startRuntime(
       turn = "player";
       for (const u of map.units) {
         if (u.team === "player" && u.hp > 0) {
-          u.ap = u.maxAp;
-          u.overwatch = false;
-          u.peekExposure = null;
+          resetTurnState(u);
         }
       }
       showTurnBanner("player");
     }
     busy = false;
+    notifyState();
     redraw();
   };
 
@@ -420,6 +488,8 @@ export function startRuntime(
     if (selected.ap <= 0 || selected.overwatch) return;
     selected.ap = 0;
     selected.overwatch = true;
+    selected = null;
+    notifyState();
     redraw();
   });
 
@@ -428,19 +498,20 @@ export function startRuntime(
     turn = "enemy";
     for (const u of map.units) {
       if (u.team === "enemy" && u.hp > 0) {
-        u.ap = u.maxAp;
-        u.peekExposure = null;
+        resetTurnState(u);
       }
     }
     selected = null;
     showTurnBanner("enemy");
     redraw();
+    notifyState();
     void animateEnemyTurn();
   });
 
   overlayButton.onclick = () => {
     overlay.classList.add("hidden");
-    onExit();
+    if (outcome && options.onComplete) options.onComplete(outcome, cloneMap(map));
+    else onExit();
   };
 
   let rafId = 0;
@@ -465,8 +536,10 @@ export function startRuntime(
 
   const initialPlayer = map.units.find((u) => u.team === "player" && u.hp > 0) ?? null;
   selected = initialPlayer;
-  showTurnBanner("player");
+  showTurnBanner(turn);
   redraw();
+  notifyState();
+  if (turn === "enemy") void animateEnemyTurn();
 
   const resize = () => {
     resizeCanvasForMap(canvas, map);
