@@ -223,4 +223,21 @@ describe("AI movement", () => {
       expect(log.length).toBeGreaterThan(0);
     }
   });
+
+  it("lets a boxed sentinel establish overwatch instead of wasting its turn", () => {
+    const map = buildMap([
+      "#####",
+      "#.#.#",
+      "#####",
+    ], [
+      { team: "enemy", x: 1, y: 1 },
+      { team: "player", x: 3, y: 1 },
+    ]);
+    const enemy = map.units[0];
+    enemy.aiBehavior = "sentinel";
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    expect(takeEnemyAction(map, enemy, session)).toEqual({ kind: "overwatch" });
+    expect(enemy).toMatchObject({ overwatch: true, ap: 0 });
+  });
 });
