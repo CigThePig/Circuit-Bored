@@ -91,6 +91,19 @@ describe("run lifecycle", () => {
     expect(getUpgrade(chosen)).toBeDefined();
   });
 
+  it("clamps current HP without dealing damage when a reward lowers maximum HP", () => {
+    const run = enterFirstCombat("VOLATILE-CELL");
+    const operator = run.squad[0];
+    operator.maxHp = 9;
+    operator.hp = 4;
+    run.status = "reward";
+    run.pendingRewards = ["volatile_cell"];
+
+    chooseUpgrade(run, "volatile_cell");
+
+    expect(operator).toMatchObject({ maxHp: 7, hp: 4 });
+  });
+
   it("applies recovery without reviving dead operators", () => {
     const run = createRun("RECOVERY");
     run.depth = 2;

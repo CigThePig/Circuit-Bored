@@ -244,7 +244,9 @@ export function chooseUpgrade(run: RunState, upgradeId: UpgradeId): void {
     for (const member of run.squad) {
       if (member.hp <= 0) continue;
       member.maxHp = Math.max(1, member.maxHp + upgrade.maxHp);
-      member.hp = Math.max(1, Math.min(member.maxHp, member.hp + upgrade.maxHp));
+      member.hp = upgrade.maxHp > 0
+        ? Math.min(member.maxHp, member.hp + upgrade.maxHp)
+        : Math.min(member.maxHp, member.hp);
     }
   }
   finishNode(run);

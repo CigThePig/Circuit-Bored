@@ -374,7 +374,10 @@ function enterEncounter(): void {
     preserveUnitState: true,
     initialTurn: active.turn,
     exitLabel: "Exit",
-    completionLabel: active.kind === "final" ? "Finish Run" : "Claim Reward",
+    completionLabel: (outcome) => {
+      if (outcome === "defeat") return "Run Report";
+      return active.kind === "final" ? "Finish Run" : "Claim Reward";
+    },
     random: () => {
       return nextRandom(run!);
     },

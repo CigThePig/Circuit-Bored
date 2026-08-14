@@ -36,13 +36,21 @@ export type RuntimeOptions = {
   onStateChange?: (map: GameMap, turn: Turn) => void;
   onComplete?: (outcome: EncounterOutcome, map: GameMap) => void;
   exitLabel?: string;
-  completionLabel?: string;
+  completionLabel?: string | ((outcome: EncounterOutcome) => string);
 };
 
 export type RuntimeHandle = {
   destroy: () => void;
   resize: () => void;
 };
+
+export function encounterOutcome(map: GameMap): EncounterOutcome | null {
+  const playerAlive = map.units.some((unit) => unit.team === "player" && unit.hp > 0);
+  const enemyAlive = map.units.some((unit) => unit.team === "enemy" && unit.hp > 0);
+  if (!enemyAlive) return "victory";
+  if (!playerAlive) return "defeat";
+  return null;
+}
 
 export function startRuntime(
   canvas: HTMLCanvasElement,
@@ -317,13 +325,12 @@ export function startRuntime(
   };
 
   const checkOutcome = () => {
-    const playerAlive = map.units.some((u) => u.team === "player" && u.hp > 0);
-    const enemyAlive = map.units.some((u) => u.team === "enemy" && u.hp > 0);
-    if (!enemyAlive) outcome = "victory";
-    else if (!playerAlive) outcome = "defeat";
+    outcome = encounterOutcome(map);
     if (outcome) {
       overlayText.textContent = outcome === "victory" ? "VICTORY" : "DEFEAT";
-      overlayButton.textContent = options.completionLabel ?? (outcome === "victory" ? "Continue" : "Run Report");
+      overlayButton.textContent = typeof options.completionLabel === "function"
+        ? options.completionLabel(outcome)
+        : options.completionLabel ?? (outcome === "victory" ? "Continue" : "Run Report");
       overlay.classList.remove("hidden", "victory", "defeat");
       overlay.classList.add(outcome === "victory" ? "victory" : "defeat");
     }
@@ -536,10 +543,14 @@ export function startRuntime(
 
   const initialPlayer = map.units.find((u) => u.team === "player" && u.hp > 0) ?? null;
   selected = initialPlayer;
-  showTurnBanner(turn);
+  // A saved encounter can contain the killing blow before its completion
+  // overlay was acknowledged. Restore that terminal state before accepting
+  // input or starting an enemy turn.
+  checkOutcome();
+  if (!outcome) showTurnBanner(turn);
   redraw();
   notifyState();
-  if (turn === "enemy") void animateEnemyTurn();
+  if (!outcome && turn === "enemy") void animateEnemyTurn();
 
   const resize = () => {
     resizeCanvasForMap(canvas, map);
