@@ -98,7 +98,13 @@ export type SightLine = {
 export type RenderState = {
   map: GameMap;
   selected: Unit | null;
-  highlights: { x: number; y: number; fill: string; border: string }[];
+  highlights: {
+    x: number;
+    y: number;
+    fill: string;
+    border: string;
+    kind?: "move" | "target";
+  }[];
   enemyPreviews: EnemyPreview[];
   floatingTexts: FloatingText[];
   coverIndicators?: CoverIndicator[];
@@ -170,26 +176,28 @@ const PALETTE = {
   HL_FILL_OPACITY: 0.22,
   HL_BRACKET_LEN: 0.22,
 
-  SIGHT_CLEAR_OUTER: "rgba(255, 216, 58, 0.18)",
-  SIGHT_CLEAR_INNER: "rgba(255, 240, 160, 0.95)",
-  SIGHT_COVER_OUTER: "rgba(255, 120, 40, 0.18)",
-  SIGHT_COVER_INNER: "rgba(255, 180, 90, 0.95)",
+  SIGHT_CLEAR_OUTER: "rgba(90, 214, 255, 0.14)",
+  SIGHT_CLEAR_INNER: "rgba(128, 229, 255, 0.72)",
+  SIGHT_COVER_OUTER: "rgba(255, 177, 71, 0.12)",
+  SIGHT_COVER_INNER: "rgba(255, 190, 96, 0.68)",
 
   COVER_WALL: "#7fe3ff",
   COVER_HALF: "#ffb347",
   COVER_HATCH: "rgba(10, 30, 45, 0.55)",
   COVER_OUTLINE: "rgba(8, 12, 18, 0.85)",
 
-  THREAT_RING: "#ff4040",
-  THREAT_PUPIL: "#1a0000",
-  THREAT_GLINT: "#ffd0d0",
+  THREAT_RING: "#ff596b",
+  THREAT_PUPIL: "#21070a",
+  THREAT_GLINT: "#ffe0e4",
   THREAT_SHADOW: "rgba(0, 0, 0, 0.7)",
 
   PREVIEW_BG: "rgba(8, 12, 18, 0.85)",
-  PREVIEW_BORDER_HI: "#ffd166",
-  PREVIEW_BORDER_LO: "#7fe3ff",
-  PREVIEW_TEXT_HI: "#ffd166",
-  PREVIEW_TEXT_LO: "#cfdce8",
+  PREVIEW_BORDER_HI: "#61e6bb",
+  PREVIEW_BORDER_MID: "#ffd166",
+  PREVIEW_BORDER_LO: "#ff7381",
+  PREVIEW_TEXT_HI: "#86f5cf",
+  PREVIEW_TEXT_MID: "#ffe09a",
+  PREVIEW_TEXT_LO: "#ff9aa5",
   PREVIEW_SHIELD: "#7fe3ff",
   PREVIEW_SHIELD_OUTLINE: "rgba(0, 0, 0, 0.85)",
 
@@ -249,7 +257,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   }
 
   for (const h of state.highlights) {
-    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border);
+    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border, h.kind ?? "move");
   }
 
   if (state.sightLines && state.sightLines.length > 0) {
@@ -278,7 +286,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState): void {
   }
 
   for (const p of state.enemyPreviews) {
-    drawEnemyPreview(ctx, p.x * cell, p.y * cell, cell, p, mapHeightPx);
+    drawEnemyPreview(ctx, p.x * cell, p.y * cell, cell, p);
   }
 
   for (const t of state.floatingTexts) {
@@ -963,16 +971,40 @@ function drawHighlight(
   cell: number,
   fill: string,
   border: string,
+  kind: "move" | "target",
 ): void {
   ctx.save();
-  ctx.globalAlpha = PALETTE.HL_FILL_OPACITY;
+  ctx.globalAlpha = kind === "target" ? 0.08 : PALETTE.HL_FILL_OPACITY;
   ctx.fillStyle = fill;
-  ctx.fillRect(px, py, cell, cell);
+  const inset = kind === "target" ? cell * 0.14 : cell * 0.20;
+  if (kind === "target") {
+    ctx.beginPath();
+    ctx.ellipse(px + cell / 2, py + cell * 0.66, cell * 0.34, cell * 0.17, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(px + cell / 2, py + inset);
+    ctx.lineTo(px + cell - inset, py + cell / 2);
+    ctx.lineTo(px + cell / 2, py + cell - inset);
+    ctx.lineTo(px + inset, py + cell / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
   ctx.restore();
 
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 2;
-  drawCornerBrackets(ctx, px, py, cell, Math.max(3, Math.floor(cell * PALETTE.HL_BRACKET_LEN)), 1.5);
+  if (kind === "move") {
+    ctx.strokeStyle = border;
+    ctx.globalAlpha = 0.72;
+    ctx.lineWidth = Math.max(1, cell * 0.035);
+    ctx.beginPath();
+    ctx.moveTo(px + cell / 2, py + inset);
+    ctx.lineTo(px + cell - inset, py + cell / 2);
+    ctx.lineTo(px + cell / 2, py + cell - inset);
+    ctx.lineTo(px + inset, py + cell / 2);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawSightLine(
@@ -985,11 +1017,12 @@ function drawSightLine(
   const toX = line.toX * cell + cell / 2;
   const toY = line.toY * cell + cell / 2;
 
-  const outerW = Math.max(3, Math.floor(cell * 0.22));
-  const innerW = Math.max(1, Math.floor(cell * 0.06));
+  const outerW = Math.max(2, Math.floor(cell * 0.09));
+  const innerW = Math.max(1, Math.floor(cell * 0.025));
 
   ctx.save();
   ctx.lineCap = "round";
+  ctx.setLineDash([Math.max(3, cell * 0.16), Math.max(2, cell * 0.12)]);
 
   ctx.strokeStyle = line.hasCover ? PALETTE.SIGHT_COVER_OUTER : PALETTE.SIGHT_CLEAR_OUTER;
   ctx.lineWidth = outerW;
@@ -1005,6 +1038,7 @@ function drawSightLine(
   ctx.lineTo(toX, toY);
   ctx.stroke();
 
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
@@ -1035,25 +1069,22 @@ function drawUnit(
 
   const visual = computeUnitVisualState(map, u, nowMs);
 
-  if (fresh && !spent) {
-    const ringColor = u.team === "player" ? PALETTE.FRESH_PLAYER : PALETTE.FRESH_ENEMY;
-    const glowColor =
-      u.team === "player" ? PALETTE.FRESH_GLOW_PLAYER : PALETTE.FRESH_GLOW_ENEMY;
-
+  if (fresh && !spent && u.team === "player") {
     ctx.save();
-    ctx.shadowColor = glowColor;
-    ctx.shadowBlur = Math.max(4, Math.floor(cell * 0.18));
-    ctx.strokeStyle = ringColor;
-    ctx.lineWidth = Math.max(2, Math.floor(cell * 0.055));
+    ctx.shadowColor = PALETTE.FRESH_GLOW_PLAYER;
+    ctx.shadowBlur = Math.max(3, Math.floor(cell * 0.12));
+    ctx.strokeStyle = PALETTE.FRESH_PLAYER;
+    ctx.globalAlpha = 0.65;
+    ctx.lineWidth = Math.max(1, Math.floor(cell * 0.035));
     ctx.beginPath();
     ctx.ellipse(
       cx,
-      cy + cell * 0.03,
-      cell * 0.39,
-      cell * 0.34,
+      cy + cell * 0.22,
+      cell * 0.30,
+      cell * 0.12,
       0,
-      0,
-      Math.PI * 2,
+      Math.PI * 0.12,
+      Math.PI * 0.88,
     );
     ctx.stroke();
     ctx.restore();
@@ -1063,41 +1094,38 @@ function drawUnit(
   drawArchetypeBadge(ctx, px, py, cell, u);
 
   if (u.overwatch) {
-    const ringR = cell * 0.42;
+    const ringR = cell * 0.38;
+    ctx.save();
+    ctx.shadowColor = PALETTE.OVERWATCH;
+    ctx.shadowBlur = cell * 0.10;
     ctx.strokeStyle = PALETTE.OVERWATCH;
-    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.82;
+    ctx.lineWidth = Math.max(1.5, cell * 0.04);
+    ctx.setLineDash([cell * 0.13, cell * 0.09]);
     ctx.beginPath();
-    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+    ctx.arc(cx, cy, ringR, Math.PI * 0.14, Math.PI * 1.86);
     ctx.stroke();
-
-    const tickLen = Math.max(2, Math.floor(cell * 0.06));
-    ctx.lineWidth = 2;
-    const dirs: [number, number][] = [
-      [0, -1],
-      [1, 0],
-      [0, 1],
-      [-1, 0],
-    ];
-
-    ctx.beginPath();
-    for (const [dx, dy] of dirs) {
-      const ix = cx + dx * (ringR - 2);
-      const iy = cy + dy * (ringR - 2);
-      const ox = cx + dx * (ringR + tickLen);
-      const oy = cy + dy * (ringR + tickLen);
-      ctx.moveTo(ix, iy);
-      ctx.lineTo(ox, oy);
-    }
-    ctx.stroke();
+    ctx.setLineDash([]);
+    const badgeSize = Math.max(7, Math.floor(cell * 0.18));
+    ctx.font = `900 ${badgeSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = PALETTE.OVERWATCH;
+    ctx.fillText("OW", px + cell * 0.20, py + cell * 0.78);
+    ctx.restore();
   }
 
   if (isSelected) {
     ctx.save();
     ctx.shadowColor = PALETTE.SELECTED_GLOW;
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = cell * 0.16;
+    ctx.fillStyle = "rgba(90,214,255,.11)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + cell * 0.20, cell * 0.35, cell * 0.15, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.strokeStyle = PALETTE.SELECTED;
-    ctx.lineWidth = 2;
-    drawCornerBrackets(ctx, px, py, cell, Math.max(4, Math.floor(cell * 0.22)), 2);
+    ctx.lineWidth = Math.max(1.5, cell * 0.045);
+    drawCornerBrackets(ctx, px, py, cell, Math.max(4, Math.floor(cell * 0.18)), cell * 0.06);
     ctx.restore();
   }
 
@@ -1141,28 +1169,38 @@ function drawHpChip(
   cell: number,
   u: Unit,
 ): void {
-  const fontSize = Math.max(8, Math.floor(cell * 0.30));
+  const fontSize = Math.max(7, Math.floor(cell * 0.22));
   const text = `${u.hp}`;
-  ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+  ctx.font = `800 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.textAlign = "center";
-  ctx.textBaseline = "top";
+  ctx.textBaseline = "middle";
   const textW = ctx.measureText(text).width;
-  const padX = 3;
+  const padX = Math.max(3, cell * 0.06);
   const chipW = textW + padX * 2;
-  const chipH = fontSize + 2;
+  const chipH = fontSize + Math.max(4, cell * 0.09);
   const chipX = px + cell / 2 - chipW / 2;
   const aboveY = py - chipH - 1;
   const chipY = aboveY >= 0 ? aboveY : py + 1;
+  const healthRatio = Math.max(0, Math.min(1, u.hp / u.maxHp));
+  const healthColor = healthRatio > 0.66 ? "#61e6bb" : healthRatio > 0.33 ? "#ffd166" : "#ff6677";
 
-  roundRect(ctx, chipX, chipY, chipW, chipH, 2);
+  ctx.save();
+  roundRect(ctx, chipX, chipY, chipW, chipH, 3);
   ctx.fillStyle = PALETTE.HP_CHIP_BG;
   ctx.fill();
-  ctx.strokeStyle = PALETTE.HP_CHIP_BORDER;
+  ctx.strokeStyle = u.team === "player" ? PALETTE.HP_CHIP_BORDER : "rgba(255,115,129,.58)";
   ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.fillStyle = PALETTE.HP_TEXT;
-  ctx.fillText(text, chipX + chipW / 2, chipY + 1);
+  ctx.fillText(text, chipX + chipW / 2, chipY + chipH * 0.42);
+  const barInset = 2;
+  const barH = Math.max(1.5, cell * 0.035);
+  ctx.fillStyle = "rgba(255,255,255,.10)";
+  ctx.fillRect(chipX + barInset, chipY + chipH - barH - barInset, chipW - barInset * 2, barH);
+  ctx.fillStyle = healthColor;
+  ctx.fillRect(chipX + barInset, chipY + chipH - barH - barInset, (chipW - barInset * 2) * healthRatio, barH);
+  ctx.restore();
 }
 
 function drawApPips(
@@ -1176,17 +1214,22 @@ function drawApPips(
   const pipCount = u.maxAp;
   if (pipCount <= 0) return;
   const cx = px + cell / 2;
-  const pipR = Math.max(1.5, cell * 0.05);
-  const gap = Math.max(1, pipR * 1.1);
+  const pipR = Math.max(1.5, cell * 0.042);
+  const gap = Math.max(1.5, pipR * 1.5);
   const totalW = pipCount * pipR * 2 + (pipCount - 1) * gap;
   const startX = cx - totalW / 2 + pipR;
   const belowY = py + cell + pipR + 1;
   const pipY = belowY + pipR <= mapHeightPx ? belowY : py + cell - pipR - 2;
   const fillColor = u.team === "player" ? PALETTE.PIP_PLAYER_FILL : PALETTE.PIP_ENEMY_FILL;
+  ctx.save();
   for (let i = 0; i < pipCount; i++) {
     const pcx = startX + i * (pipR * 2 + gap);
     ctx.beginPath();
-    ctx.arc(pcx, pipY, pipR, 0, Math.PI * 2);
+    ctx.moveTo(pcx, pipY - pipR);
+    ctx.lineTo(pcx + pipR, pipY);
+    ctx.lineTo(pcx, pipY + pipR);
+    ctx.lineTo(pcx - pipR, pipY);
+    ctx.closePath();
     if (i < u.ap) {
       ctx.fillStyle = fillColor;
       ctx.fill();
@@ -1199,6 +1242,7 @@ function drawApPips(
       ctx.stroke();
     }
   }
+  ctx.restore();
 }
 
 function drawCoverIndicator(
@@ -1279,48 +1323,36 @@ function drawThreatMarker(
 ): void {
   const px = m.x * cell;
   const py = m.y * cell;
-  const ecx = px + cell / 2;
-  const ecyDesired = py - cell * 0.05;
-  const ecy = Math.max(ecyDesired, cell * 0.20);
-  const r = cell * 0.18;
+  const ecx = px + cell * 0.83;
+  const ecy = py + cell * 0.20;
+  const r = cell * 0.105;
 
   ctx.save();
-  ctx.globalAlpha = pulse;
+  ctx.globalAlpha = 0.72 + pulse * 0.24;
+  ctx.shadowColor = PALETTE.THREAT_RING;
+  ctx.shadowBlur = cell * 0.10 * pulse;
 
-  ctx.fillStyle = PALETTE.THREAT_SHADOW;
+  // A compact warning chevron means "this enemy has a firing solution".
+  // It replaces the old eye/crosshair, which looked like a player targeting
+  // reticle and competed with the actual hit-chance preview.
   ctx.beginPath();
-  ctx.arc(ecx, ecy + 1, r + 1, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.strokeStyle = PALETTE.THREAT_RING;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(ecx, ecy, r, 0, Math.PI * 2);
-  ctx.stroke();
-
+  ctx.moveTo(ecx, ecy - r);
+  ctx.lineTo(ecx + r, ecy + r * 0.72);
+  ctx.lineTo(ecx, ecy + r * 0.42);
+  ctx.lineTo(ecx - r, ecy + r * 0.72);
+  ctx.closePath();
   ctx.fillStyle = PALETTE.THREAT_PUPIL;
-  ctx.beginPath();
-  ctx.arc(ecx, ecy, r * 0.45, 0, Math.PI * 2);
   ctx.fill();
-
-  ctx.fillStyle = PALETTE.THREAT_GLINT;
-  ctx.beginPath();
-  ctx.arc(ecx + r * 0.18, ecy - r * 0.22, Math.max(0.8, cell * 0.025), 0, Math.PI * 2);
-  ctx.fill();
-
-  const tickLen = Math.max(2, Math.floor(cell * 0.06));
   ctx.strokeStyle = PALETTE.THREAT_RING;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(ecx, ecy - r - 1);
-  ctx.lineTo(ecx, ecy - r - 1 - tickLen);
-  ctx.moveTo(ecx, ecy + r + 1);
-  ctx.lineTo(ecx, ecy + r + 1 + tickLen);
-  ctx.moveTo(ecx - r - 1, ecy);
-  ctx.lineTo(ecx - r - 1 - tickLen, ecy);
-  ctx.moveTo(ecx + r + 1, ecy);
-  ctx.lineTo(ecx + r + 1 + tickLen, ecy);
+  ctx.lineWidth = Math.max(1, cell * 0.03);
   ctx.stroke();
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = PALETTE.THREAT_GLINT;
+  ctx.font = `900 ${Math.max(6, Math.floor(cell * 0.14))}px ui-monospace, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", ecx, ecy + cell * 0.005);
 
   ctx.restore();
 }
@@ -1362,53 +1394,67 @@ function drawEnemyPreview(
   py: number,
   cell: number,
   p: EnemyPreview,
-  mapHeightPx: number,
 ): void {
   const text = `${p.hitPct}%`;
-  const fontSize = Math.max(8, Math.floor(cell * 0.28));
-  ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+  const chanceColor = p.hitPct >= 70
+    ? PALETTE.PREVIEW_BORDER_HI
+    : p.hitPct >= 45
+      ? PALETTE.PREVIEW_BORDER_MID
+      : PALETTE.PREVIEW_BORDER_LO;
+  const textColor = p.hitPct >= 70
+    ? PALETTE.PREVIEW_TEXT_HI
+    : p.hitPct >= 45
+      ? PALETTE.PREVIEW_TEXT_MID
+      : PALETTE.PREVIEW_TEXT_LO;
+
+  ctx.save();
+  ctx.shadowColor = chanceColor;
+  ctx.shadowBlur = cell * 0.08;
+  ctx.strokeStyle = chanceColor;
+  ctx.lineWidth = Math.max(1.5, cell * 0.04);
+  drawCornerBrackets(
+    ctx,
+    px + cell * 0.045,
+    py + cell * 0.045,
+    cell * 0.91,
+    Math.max(4, cell * 0.15),
+    0,
+  );
+  ctx.shadowBlur = 0;
+
+  const fontSize = Math.max(7, Math.floor(cell * 0.22));
+  ctx.font = `800 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.textAlign = "center";
-  ctx.textBaseline = "top";
+  ctx.textBaseline = "middle";
   const textW = ctx.measureText(text).width;
-  const padX = 4;
-  const pillH = fontSize + 4;
+  const padX = Math.max(3, cell * 0.07);
+  const pillH = fontSize + Math.max(3, cell * 0.07);
   const pillW = textW + padX * 2;
-  const pillX = px + cell / 2 - pillW / 2;
-  const hpFontSize = Math.max(8, Math.floor(cell * 0.30));
-  const hpChipH = hpFontSize + 2;
-  const stackedY = py - hpChipH - pillH - 3;
-  const belowY = py + cell + 2;
-  let pillY: number;
-  if (stackedY >= 0) {
-    pillY = stackedY;
-  } else if (belowY + pillH <= mapHeightPx) {
-    pillY = belowY;
-  } else {
-    pillY = py + 2;
-  }
+  const pillX = px + cell - pillW - cell * 0.055;
+  const pillY = py + cell - pillH - cell * 0.055;
 
   roundRect(ctx, pillX, pillY, pillW, pillH, 3);
   ctx.fillStyle = PALETTE.PREVIEW_BG;
   ctx.fill();
-  ctx.strokeStyle =
-    p.hitPct >= 60 ? PALETTE.PREVIEW_BORDER_HI : PALETTE.PREVIEW_BORDER_LO;
+  ctx.strokeStyle = chanceColor;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  ctx.fillStyle = p.hitPct >= 60 ? PALETTE.PREVIEW_TEXT_HI : PALETTE.PREVIEW_TEXT_LO;
-  ctx.fillText(text, px + cell / 2, pillY + 2);
+  ctx.fillStyle = textColor;
+  ctx.fillText(text, pillX + pillW / 2, pillY + pillH / 2 + 0.5);
 
   if (p.hasCover) {
-    const shieldH = Math.max(8, Math.floor(cell * 0.30));
+    const shieldH = Math.max(7, Math.floor(cell * 0.22));
     drawShieldIcon(
       ctx,
-      px + 3,
-      py + cell - shieldH - 3,
+      px + cell * 0.07,
+      py + cell - shieldH - cell * 0.07,
       shieldH,
       PALETTE.PREVIEW_SHIELD,
       PALETTE.PREVIEW_SHIELD_OUTLINE,
     );
   }
+  ctx.restore();
 }
 
 function drawFloatingText(
