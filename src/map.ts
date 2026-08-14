@@ -6,6 +6,42 @@ import {
 
 export type TileType = "floor" | "wall" | "half_cover";
 
+export type AiBehavior = "balanced" | "assault" | "marksman" | "sentinel";
+
+export type CombatProfile = {
+  accuracyBonus: number;
+  damageBonus: number;
+  damageReduction: number;
+  coverDefenseBonus: number;
+  peekPenaltyReduction: number;
+  uncoveredAccuracyBonus: number;
+  firstShotAccuracyBonus: number;
+  stationaryAccuracyBonus: number;
+  lowHealthAccuracyBonus: number;
+  firstMoveFree: boolean;
+  killApRefund: number;
+  killHeal: number;
+  overwatchAccuracyBonus: number;
+  overwatchDamageBonus: number;
+};
+
+export const EMPTY_COMBAT_PROFILE: CombatProfile = {
+  accuracyBonus: 0,
+  damageBonus: 0,
+  damageReduction: 0,
+  coverDefenseBonus: 0,
+  peekPenaltyReduction: 0,
+  uncoveredAccuracyBonus: 0,
+  firstShotAccuracyBonus: 0,
+  stationaryAccuracyBonus: 0,
+  lowHealthAccuracyBonus: 0,
+  firstMoveFree: false,
+  killApRefund: 0,
+  killHeal: 0,
+  overwatchAccuracyBonus: 0,
+  overwatchDamageBonus: 0,
+};
+
 export type Unit = {
   id: string;
   team: "player" | "enemy";
@@ -17,6 +53,15 @@ export type Unit = {
   maxAp: number;
   overwatch: boolean;
   peekExposure: { x: number; y: number } | null;
+  archetypeId?: string;
+  displayName?: string;
+  aiBehavior?: AiBehavior;
+  combat?: CombatProfile;
+  movesThisTurn?: number;
+  shotsThisTurn?: number;
+  killsThisTurn?: number;
+  encounterShots?: number;
+  resolvingOverwatch?: boolean;
 };
 
 export type GameMap = {
@@ -102,6 +147,7 @@ export function cloneMap(map: GameMap): GameMap {
     units: map.units.map((u) => ({
       ...u,
       peekExposure: u.peekExposure ? { ...u.peekExposure } : null,
+      combat: u.combat ? { ...u.combat } : undefined,
     })),
   };
 }
