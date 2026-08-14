@@ -1,0 +1,285 @@
+import { draw, type RenderState } from "../src/render.ts";
+import { buildVisualScenes, type VisualScene } from "./visual-scenes.ts";
+
+type ViewMode = "normal" | "grayscale" | "contrast" | "squint";
+type BackdropMode = "dark" | "light";
+
+const scenes = buildVisualScenes();
+const canvases = new Map<string, HTMLCanvasElement>();
+const sceneGrid = requiredElement<HTMLElement>("scene-grid");
+const cellInput = requiredElement<HTMLInputElement>("cell-size");
+const cellOutput = requiredElement<HTMLOutputElement>("cell-output");
+const viewSelect = requiredElement<HTMLSelectElement>("view-mode");
+const backdropSelect = requiredElement<HTMLSelectElement>("backdrop-mode");
+const overlayInput = requiredElement<HTMLInputElement>("show-overlays");
+const animateInput = requiredElement<HTMLInputElement>("animate");
+const exportButton = requiredElement<HTMLButtonElement>("export-sheet");
+const diagnosticsButton = requiredElement<HTMLButtonElement>("copy-diagnostics");
+const status = requiredElement<HTMLElement>("status");
+
+let animationFrame = 0;
+
+function requiredElement<T extends HTMLElement>(id: string): T {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(`Visual lab element '#${id}' is missing`);
+  return element as T;
+}
+
+function clampCellSize(value: number): number {
+  if (!Number.isFinite(value)) return 40;
+  return Math.max(24, Math.min(64, Math.round(value / 2) * 2));
+}
+
+function isViewMode(value: string | null): value is ViewMode {
+  return value === "normal" || value === "grayscale" || value === "contrast" || value === "squint";
+}
+
+function isBackdropMode(value: string | null): value is BackdropMode {
+  return value === "dark" || value === "light";
+}
+
+function initializeFromUrl(): void {
+  const params = new URLSearchParams(location.search);
+  const requestedCell = params.get("cell");
+  const cell = requestedCell === null ? 40 : clampCellSize(Number(requestedCell));
+  const requestedView = params.get("view");
+  const requestedBackdrop = params.get("backdrop");
+  const view = isViewMode(requestedView) ? requestedView : "normal";
+  const backdrop = isBackdropMode(requestedBackdrop) ? requestedBackdrop : "dark";
+  cellInput.value = String(cell);
+  viewSelect.value = view;
+  backdropSelect.value = backdrop;
+  overlayInput.checked = params.get("overlays") !== "0";
+  animateInput.checked = params.get("animate") === "1";
+}
+
+function syncUrl(): void {
+  const params = new URLSearchParams();
+  params.set("cell", cellInput.value);
+  params.set("view", viewSelect.value);
+  params.set("backdrop", backdropSelect.value);
+  params.set("overlays", overlayInput.checked ? "1" : "0");
+  params.set("animate", animateInput.checked ? "1" : "0");
+  history.replaceState(null, "", `${location.pathname}?${params}`);
+}
+
+function sceneState(scene: VisualScene): RenderState {
+  if (overlayInput.checked) return scene.state;
+  return {
+    ...scene.state,
+    highlights: [],
+    enemyPreviews: [],
+    floatingTexts: [],
+    coverIndicators: [],
+    threatMarkers: [],
+    sightLines: [],
+  };
+}
+
+function sizeCanvas(canvas: HTMLCanvasElement, state: RenderState, cell: number): void {
+  const cssWidth = state.map.width * cell;
+  const cssHeight = state.map.height * cell;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = Math.floor(cssWidth * dpr);
+  canvas.height = Math.floor(cssHeight * dpr);
+  canvas.dataset.cssWidth = String(cssWidth);
+  canvas.dataset.cssHeight = String(cssHeight);
+  canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawScene(scene: VisualScene, resize: boolean): void {
+  const canvas = canvases.get(scene.id);
+  if (!canvas) return;
+  if (resize) sizeCanvas(canvas, scene.state, Number(cellInput.value));
+  draw(canvas, sceneState(scene));
+}
+
+function renderAll(resize = true): void {
+  const cell = clampCellSize(Number(cellInput.value));
+  cellInput.value = String(cell);
+  cellOutput.value = `${cell} px`;
+  document.body.dataset.view = viewSelect.value;
+  document.body.dataset.backdrop = backdropSelect.value;
+  for (const scene of scenes) drawScene(scene, resize);
+  syncUrl();
+  updateAnimation();
+}
+
+function animationLoop(): void {
+  if (!animateInput.checked || document.hidden) {
+    animationFrame = 0;
+    return;
+  }
+  for (const scene of scenes) drawScene(scene, false);
+  animationFrame = requestAnimationFrame(animationLoop);
+}
+
+function updateAnimation(): void {
+  if (animateInput.checked && !document.hidden && animationFrame === 0) {
+    animationFrame = requestAnimationFrame(animationLoop);
+  } else if ((!animateInput.checked || document.hidden) && animationFrame !== 0) {
+    cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+  }
+}
+
+function filterForView(): string {
+  if (viewSelect.value === "grayscale") return "grayscale(1)";
+  if (viewSelect.value === "contrast") return "grayscale(1) contrast(1.85)";
+  if (viewSelect.value === "squint") return "grayscale(1) contrast(1.3) blur(3px)";
+  return "none";
+}
+
+function processedCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const width = Number(source.dataset.cssWidth);
+  const height = Number(source.dataset.cssHeight);
+  const output = document.createElement("canvas");
+  output.width = width;
+  output.height = height;
+  const ctx = output.getContext("2d");
+  if (!ctx) throw new Error("Canvas export context is unavailable");
+  ctx.fillStyle = backdropSelect.value === "light" ? "#dbe5e8" : "#071018";
+  ctx.fillRect(0, 0, width, height);
+  ctx.filter = filterForView();
+  ctx.drawImage(source, 0, 0, source.width, source.height, 0, 0, width, height);
+  ctx.filter = "none";
+  return output;
+}
+
+function downloadCanvas(canvas: HTMLCanvasElement, filename: string): void {
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      setStatus("PNG export failed.", true);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus(`Exported ${filename}`);
+  }, "image/png");
+}
+
+function exportContactSheet(): void {
+  const rendered = scenes.map((scene) => ({ scene, canvas: processedCanvas(canvases.get(scene.id)!) }));
+  const padding = 24;
+  const labelHeight = 42;
+  const width = Math.max(...rendered.map(({ canvas }) => canvas.width)) + padding * 2;
+  const height = padding + rendered.reduce((sum, { canvas }) => sum + labelHeight + canvas.height + padding, 0);
+  const sheet = document.createElement("canvas");
+  sheet.width = width;
+  sheet.height = height;
+  const ctx = sheet.getContext("2d");
+  if (!ctx) throw new Error("Contact-sheet context is unavailable");
+  ctx.fillStyle = backdropSelect.value === "light" ? "#dbe5e8" : "#071018";
+  ctx.fillRect(0, 0, width, height);
+  let y = padding;
+  for (const { scene, canvas } of rendered) {
+    ctx.fillStyle = backdropSelect.value === "light" ? "#10202a" : "#dcebf0";
+    ctx.font = "700 16px ui-monospace, monospace";
+    ctx.textBaseline = "top";
+    ctx.fillText(scene.title, padding, y + 6);
+    y += labelHeight;
+    ctx.drawImage(canvas, padding, y);
+    y += canvas.height + padding;
+  }
+  downloadCanvas(sheet, `circuit-bored-visual-${cellInput.value}px-${viewSelect.value}.png`);
+}
+
+async function copyDiagnostics(): Promise<void> {
+  const payload = {
+    page: location.href,
+    cellSize: Number(cellInput.value),
+    view: viewSelect.value,
+    backdrop: backdropSelect.value,
+    overlays: overlayInput.checked,
+    animation: animateInput.checked,
+    devicePixelRatio: window.devicePixelRatio,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    scenes: scenes.map(({ id, state }) => ({ id, width: state.map.width, height: state.map.height })),
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    setStatus("Copied visual-lab diagnostics.");
+  } catch {
+    setStatus("Clipboard access was unavailable.", true);
+  }
+}
+
+function setStatus(message: string, error = false): void {
+  status.textContent = message;
+  status.style.color = error ? "var(--red)" : "var(--cyan)";
+}
+
+function buildSceneCards(): void {
+  for (const [index, scene] of scenes.entries()) {
+    const article = document.createElement("article");
+    article.className = "scene";
+    article.id = `scene-${scene.id}`;
+
+    const head = document.createElement("div");
+    head.className = "scene-head";
+    const copy = document.createElement("div");
+    const kicker = document.createElement("div");
+    kicker.className = "scene-kicker";
+    kicker.textContent = `Scene ${index + 1} · ${scene.state.map.width}×${scene.state.map.height}`;
+    const title = document.createElement("h2");
+    title.textContent = scene.title;
+    const description = document.createElement("p");
+    description.textContent = scene.description;
+    const review = document.createElement("p");
+    review.className = "review";
+    review.textContent = `Review: ${scene.review}`;
+    copy.append(kicker, title, description, review);
+
+    const exportScene = document.createElement("button");
+    exportScene.textContent = "Export PNG";
+    exportScene.addEventListener("click", () => {
+      const source = canvases.get(scene.id);
+      if (source) downloadCanvas(processedCanvas(source), `circuit-bored-${scene.id}-${cellInput.value}px-${viewSelect.value}.png`);
+    });
+    head.append(copy, exportScene);
+
+    const stage = document.createElement("div");
+    stage.className = "canvas-stage";
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("aria-label", scene.title);
+    stage.appendChild(canvas);
+    article.append(head, stage);
+    sceneGrid.appendChild(article);
+    canvases.set(scene.id, canvas);
+  }
+}
+
+function handleShortcut(event: KeyboardEvent): void {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+  if (/^[1-4]$/.test(event.key)) {
+    scenes[Number(event.key) - 1]?.id && document.getElementById(`scene-${scenes[Number(event.key) - 1].id}`)?.scrollIntoView({ behavior: "smooth" });
+  } else if (event.key.toLowerCase() === "g") {
+    viewSelect.value = viewSelect.value === "grayscale" ? "normal" : "grayscale";
+    renderAll(false);
+  } else if (event.key.toLowerCase() === "s") {
+    viewSelect.value = viewSelect.value === "squint" ? "normal" : "squint";
+    renderAll(false);
+  } else if (event.key.toLowerCase() === "e") {
+    exportContactSheet();
+  }
+}
+
+initializeFromUrl();
+buildSceneCards();
+renderAll();
+
+cellInput.addEventListener("input", () => renderAll(true));
+viewSelect.addEventListener("change", () => renderAll(false));
+backdropSelect.addEventListener("change", () => renderAll(false));
+overlayInput.addEventListener("change", () => renderAll(false));
+animateInput.addEventListener("change", () => renderAll(false));
+exportButton.addEventListener("click", exportContactSheet);
+diagnosticsButton.addEventListener("click", () => void copyDiagnostics());
+document.addEventListener("visibilitychange", updateAnimation);
+window.addEventListener("keydown", handleShortcut);
