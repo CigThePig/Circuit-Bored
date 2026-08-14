@@ -832,6 +832,7 @@ function drawUnit(
   }
 
   drawUnitSilhouette(ctx, px, py, cell, u, bodyColor, visual);
+  drawArchetypeBadge(ctx, px, py, cell, u);
 
   if (u.overwatch) {
     const ringR = cell * 0.42;
@@ -874,6 +875,35 @@ function drawUnit(
 
   drawHpChip(ctx, px, py, cell, u);
   drawApPips(ctx, px, py, cell, u, mapHeightPx);
+}
+
+function drawArchetypeBadge(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  unit: Unit,
+): void {
+  if (!unit.archetypeId) return;
+  const codes: Record<string, string> = {
+    operator: "RK",
+    runner: "VX",
+    bulwark: "HX",
+    scrapper: "SC",
+    rifleman: "RF",
+    marksman: "MK",
+    sentinel: "SN",
+  };
+  const code = codes[unit.archetypeId];
+  if (!code) return;
+  const size = Math.max(7, Math.floor(cell * 0.18));
+  ctx.save();
+  ctx.font = `800 ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = unit.team === "player" ? PALETTE.PLAYER_BODY : PALETTE.ENEMY_BODY;
+  ctx.fillText(code, px + 2, py + 2);
+  ctx.restore();
 }
 
 function drawHpChip(

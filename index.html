@@ -64,6 +64,97 @@
         color: var(--cyan);
         flex: 1;
       }
+      #seed-label {
+        color: var(--text-dim);
+        font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.08em;
+      }
+      #screen {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px 14px 28px;
+      }
+      .screen-kicker {
+        color: var(--cyan);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+      }
+      .screen-title {
+        margin: 0;
+        font-size: clamp(28px, 9vw, 46px);
+        line-height: 0.95;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .screen-copy {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .panel {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-left-color: var(--cyan-soft);
+        background: linear-gradient(135deg, rgba(22, 28, 37, 0.94), rgba(11, 15, 21, 0.96));
+        box-shadow: inset 0 0 24px rgba(90, 214, 255, 0.025);
+      }
+      .panel h2, .panel h3 { margin: 0 0 8px; }
+      .panel p { margin: 0; }
+      .action-stack { display: grid; gap: 8px; }
+      .action-stack button { width: 100%; min-height: 46px; text-align: left; }
+      .seed-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+      input {
+        min-width: 0;
+        padding: 10px;
+        color: var(--text);
+        background: #080b10;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-transform: uppercase;
+      }
+      input:focus { outline: 1px solid var(--cyan); border-color: var(--cyan); }
+      .squad-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+      .squad-card {
+        padding: 9px 7px;
+        border: 1px solid var(--line);
+        background: rgba(7, 11, 16, 0.7);
+      }
+      .squad-card.dead { opacity: 0.42; border-color: var(--red); }
+      .squad-name { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+      .health-track { height: 4px; margin: 7px 0 5px; background: #252a32; overflow: hidden; }
+      .health-fill { height: 100%; background: linear-gradient(90deg, var(--red), var(--amber), var(--cyan)); }
+      .micro { color: var(--text-dim); font-size: 10px; line-height: 1.35; }
+      .route { display: grid; grid-template-columns: repeat(7, minmax(72px, 1fr)); gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+      .route-column { display: flex; min-width: 76px; flex-direction: column; gap: 6px; }
+      .route-depth { color: var(--text-dim); font-size: 9px; letter-spacing: 0.1em; text-align: center; }
+      .route-node {
+        min-height: 80px;
+        padding: 8px 6px;
+        white-space: normal;
+        text-align: center;
+        line-height: 1.25;
+      }
+      .route-node small { display: block; margin-top: 4px; color: var(--text-dim); font-size: 8px; letter-spacing: 0.02em; text-transform: none; }
+      .route-node.current { border-color: var(--cyan); box-shadow: 0 0 12px var(--cyan-glow); }
+      .route-node.chosen { border-color: var(--amber); color: var(--amber); }
+      .route-node.skipped { opacity: 0.25; }
+      .route-node.elite, .route-node.final { border-color: var(--red); }
+      .choice-grid { display: grid; gap: 8px; }
+      .choice-card { padding: 14px; min-height: 112px; white-space: normal; text-align: left; }
+      .choice-card strong { display: block; margin-bottom: 6px; color: var(--cyan); font-size: 14px; }
+      .choice-card span { color: var(--text-dim); font-size: 11px; line-height: 1.45; text-transform: none; letter-spacing: 0.02em; }
+      .tag { display: inline-block; margin-top: 9px; color: var(--amber); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+      .upgrade-list { display: flex; flex-wrap: wrap; gap: 5px; }
+      .upgrade-chip { padding: 4px 6px; border: 1px solid var(--line); color: var(--text-dim); font-size: 9px; }
+      .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      .stat { padding: 12px; background: rgba(0,0,0,.2); border: 1px solid var(--line); }
+      .stat strong { display: block; color: var(--cyan); font-size: 22px; }
+      .warning { color: var(--red); font-size: 12px; }
       #canvas-wrap {
         position: relative;
         width: 100%;
@@ -266,18 +357,22 @@
     <div id="app">
       <div id="topbar">
         <div class="mode" id="mode-label">Editor</div>
+        <div id="seed-label"></div>
         <button id="screenshot">Shot</button>
-        <button id="mode-toggle">Play</button>
+        <button id="mode-toggle">Title</button>
       </div>
-      <div id="canvas-wrap">
-        <canvas id="canvas" width="384" height="384"></canvas>
-        <div id="overlay" class="overlay hidden">
-          <h2 id="overlay-text">VICTORY</h2>
-          <button id="overlay-button" class="primary">Back to Editor</button>
+      <main id="screen"></main>
+      <div id="board-shell" class="hidden">
+        <div id="canvas-wrap">
+          <canvas id="canvas" width="384" height="384"></canvas>
+          <div id="overlay" class="overlay hidden">
+            <h2 id="overlay-text">VICTORY</h2>
+            <button id="overlay-button" class="primary">Continue</button>
+          </div>
+          <div id="turn-banner" class="turn-banner hidden"></div>
         </div>
-        <div id="turn-banner" class="turn-banner hidden"></div>
+        <div id="hud"></div>
       </div>
-      <div id="hud"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

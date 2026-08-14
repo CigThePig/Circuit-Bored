@@ -507,10 +507,8 @@ export function shotHitPenalty(
   shooter: Unit,
   target: Unit,
 ): number {
-  const shot = canShootTarget(map, shooter, target);
-  if (!shot.canShoot) return Infinity;
-  const cover = coverPenaltyForShot(map, shooter, target, shot);
-  return shot.mode === "peek" ? cover + PEEK_PENALTY : cover;
+  const preview = previewShot(map, shooter, target);
+  return preview.shot.canShoot ? BASE_HIT - preview.hitChance : Infinity;
 }
 
 function coverPenaltyForShot(
@@ -551,15 +549,39 @@ export function previewShot(
   const cover = shot.canShoot
     ? coverPenaltyForShot(map, shooter, target, shot)
     : 0;
+  const profile = shooter.combat;
+  const targetProfile = target.combat;
+  const defendedCover = cover > 0
+    ? cover + (targetProfile?.coverDefenseBonus ?? 0)
+    : 0;
+  const peekPenalty = shot.mode === "peek"
+    ? Math.max(0, PEEK_PENALTY - (profile?.peekPenaltyReduction ?? 0))
+    : 0;
   const penalty = shot.canShoot
-    ? cover + (shot.mode === "peek" ? PEEK_PENALTY : 0)
+    ? defendedCover + peekPenalty
     : Infinity;
+  let accuracyBonus = profile?.accuracyBonus ?? 0;
+  if (cover === 0) accuracyBonus += profile?.uncoveredAccuracyBonus ?? 0;
+  if ((shooter.encounterShots ?? 0) === 0) {
+    accuracyBonus += profile?.firstShotAccuracyBonus ?? 0;
+  }
+  if ((shooter.movesThisTurn ?? 0) === 0) {
+    accuracyBonus += profile?.stationaryAccuracyBonus ?? 0;
+  }
+  if (shooter.hp * 2 <= shooter.maxHp) {
+    accuracyBonus += profile?.lowHealthAccuracyBonus ?? 0;
+  }
+  if (shooter.resolvingOverwatch) {
+    accuracyBonus += profile?.overwatchAccuracyBonus ?? 0;
+  }
   const targetPoint = shot.targetExposure && target.peekExposure
     ? { ...target.peekExposure }
     : { x: target.x, y: target.y };
   return {
     shot,
-    hitChance: Math.max(0, BASE_HIT - penalty),
+    hitChance: shot.canShoot
+      ? Math.max(0, Math.min(0.98, BASE_HIT + accuracyBonus - penalty))
+      : 0,
     hadCover: shot.canShoot && cover > 0,
     targetPoint,
   };
@@ -582,11 +604,34 @@ export function resolveShot(
   const { shot, hitChance, hadCover } = preview;
   const roll = rng();
   const hit = roll < hitChance;
-  const damage = hit ? SHOT_DAMAGE : 0;
+  const rawDamage = SHOT_DAMAGE + (shooter.combat?.damageBonus ?? 0) +
+    (shooter.resolvingOverwatch ? shooter.combat?.overwatchDamageBonus ?? 0 : 0);
+  const damage = hit
+    ? Math.max(1, rawDamage - (target.combat?.damageReduction ?? 0))
+    : 0;
+  if (shot.canShoot) {
+    shooter.shotsThisTurn = (shooter.shotsThisTurn ?? 0) + 1;
+    shooter.encounterShots = (shooter.encounterShots ?? 0) + 1;
+  }
   if (hit) {
+    const wasAlive = target.hp > 0;
     target.hp = Math.max(0, target.hp - damage);
     if (target.hp <= 0) {
       target.peekExposure = null;
+      if (wasAlive) {
+        const firstKill = (shooter.killsThisTurn ?? 0) === 0;
+        shooter.killsThisTurn = (shooter.killsThisTurn ?? 0) + 1;
+        if (firstKill) {
+          shooter.ap = Math.min(
+            shooter.maxAp,
+            shooter.ap + (shooter.combat?.killApRefund ?? 0),
+          );
+          shooter.hp = Math.min(
+            shooter.maxHp,
+            shooter.hp + (shooter.combat?.killHeal ?? 0),
+          );
+        }
+      }
     }
   }
   if (shot.canShoot && shot.mode === "peek" && shot.peekFrom) {

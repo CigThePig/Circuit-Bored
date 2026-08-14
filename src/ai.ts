@@ -14,6 +14,7 @@ import type { AiSession } from "./aiSession.ts";
 export type AiAction =
   | { kind: "shoot"; target: Unit; result: ShotResult }
   | { kind: "move"; from: { x: number; y: number }; to: { x: number; y: number } }
+  | { kind: "overwatch" }
   | { kind: "wait" };
 
 const DIRS = [
@@ -232,8 +233,12 @@ function scoreCandidate(
       }
     }
     const coverFromTarget = targetCoverPenalty(map, target, enemy);
-    if (coverFromTarget > 0) score += AI_SCORE_COVER;
-    score += AI_SCORE_DISTANCE * manhattan(candidate.x, candidate.y, target.x, target.y);
+    const coverWeight = enemy.aiBehavior === "sentinel" || enemy.aiBehavior === "marksman"
+      ? AI_SCORE_COVER * 2
+      : AI_SCORE_COVER;
+    if (coverFromTarget > 0) score += coverWeight;
+    const distanceWeight = enemy.aiBehavior === "assault" ? -3 : AI_SCORE_DISTANCE;
+    score += distanceWeight * manhattan(candidate.x, candidate.y, target.x, target.y);
     score += AI_SCORE_ADJACENT_ALLY * adjacentAllyCount(map, enemy, candidate.x, candidate.y);
 
     let exposed = false;
@@ -272,6 +277,7 @@ export function takeEnemyAction(
   map: GameMap,
   enemy: Unit,
   session: AiSession,
+  rng: () => number = Math.random,
 ): AiAction {
   if (enemy.hp <= 0 || enemy.ap <= 0) return { kind: "wait" };
 
@@ -303,7 +309,7 @@ export function takeEnemyAction(
         }
       }
       enemy.ap -= SHOOT_AP_COST;
-      const result = resolveShot(map, enemy, best);
+      const result = resolveShot(map, enemy, best, rng);
       return { kind: "shoot", target: best, result };
     }
   }
@@ -318,6 +324,18 @@ export function takeEnemyAction(
       bestScore = s;
       bestCandidate = c;
     }
+  }
+
+  if (
+    enemy.aiBehavior === "sentinel" &&
+    bestCandidate &&
+    bestCandidate.x === enemy.x &&
+    bestCandidate.y === enemy.y &&
+    enemy.ap > 0
+  ) {
+    enemy.ap = 0;
+    enemy.overwatch = true;
+    return { kind: "overwatch" };
   }
 
   // If the best candidate is the current tile, fall back to A* toward an open
