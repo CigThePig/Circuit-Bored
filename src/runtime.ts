@@ -195,17 +195,19 @@ export function startRuntime(
       }
     }
 
-    for (const e of map.units) {
-      if (e.team !== "enemy" || e.hp <= 0) continue;
-      const preview = cachedPreview(selected, e);
-      if (preview.shot.canShoot) {
-        state.sightLines!.push({
-          fromX: preview.shot.from.x,
-          fromY: preview.shot.from.y,
-          toX: preview.targetPoint.x,
-          toY: preview.targetPoint.y,
-          hasCover: preview.hadCover,
-        });
+    if (selected.ap >= 2) {
+      for (const e of map.units) {
+        if (e.team !== "enemy" || e.hp <= 0) continue;
+        const preview = cachedPreview(selected, e);
+        if (preview.shot.canShoot) {
+          state.sightLines!.push({
+            fromX: preview.shot.from.x,
+            fromY: preview.shot.from.y,
+            toX: preview.targetPoint.x,
+            toY: preview.targetPoint.y,
+            hasCover: preview.hadCover,
+          });
+        }
       }
     }
   };
@@ -229,6 +231,7 @@ export function startRuntime(
             y: c.y,
             fill: "rgba(80, 200, 120, 0.55)",
             border: "rgba(80, 200, 120, 1)",
+            kind: "move",
           });
         }
       }
@@ -243,6 +246,7 @@ export function startRuntime(
           y: u.y,
           fill: "rgba(255, 80, 80, 0.55)",
           border: "rgba(255, 80, 80, 1)",
+          kind: "target",
         });
         state.enemyPreviews.push({
           x: u.x,
