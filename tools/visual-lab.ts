@@ -17,10 +17,12 @@ const viewSelect = requiredElement<HTMLSelectElement>("view-mode");
 const backdropSelect = requiredElement<HTMLSelectElement>("backdrop-mode");
 const overlayInput = requiredElement<HTMLInputElement>("show-overlays");
 const animateInput = requiredElement<HTMLInputElement>("animate");
+const ambientInput = requiredElement<HTMLInputElement>("ambient");
 const exportButton = requiredElement<HTMLButtonElement>("export-sheet");
 const diagnosticsButton = requiredElement<HTMLButtonElement>("copy-diagnostics");
 const inspectionTheme = requiredElement<HTMLSelectElement>("inspection-theme");
 const inspectionSeed = requiredElement<HTMLInputElement>("inspection-seed");
+const inspectionProfile = requiredElement<HTMLSelectElement>("inspection-profile");
 const inspectionButton = requiredElement<HTMLButtonElement>("inspect-seed");
 const status = requiredElement<HTMLElement>("status");
 
@@ -58,6 +60,9 @@ function initializeFromUrl(): void {
   backdropSelect.value = backdrop;
   overlayInput.checked = params.get("overlays") !== "0";
   animateInput.checked = params.get("animate") === "1";
+  ambientInput.checked = params.get("ambient") !== "0";
+  const profile = params.get("inspectionProfile");
+  inspectionProfile.value = profile === "quiet" ? "quiet" : "landmark";
   const theme = params.get("inspectionTheme");
   if (isLevelThemeId(theme)) inspectionTheme.value = theme;
   inspectionSeed.value = params.get("inspectionSeed")?.slice(0, 80) || "REVIEW-SEED-1";
@@ -70,6 +75,8 @@ function syncUrl(): void {
   params.set("backdrop", backdropSelect.value);
   params.set("overlays", overlayInput.checked ? "1" : "0");
   params.set("animate", animateInput.checked ? "1" : "0");
+  params.set("ambient", ambientInput.checked ? "1" : "0");
+  params.set("inspectionProfile", inspectionProfile.value);
   params.set("inspectionTheme", inspectionTheme.value);
   params.set("inspectionSeed", inspectionSeed.value.trim() || "REVIEW-SEED-1");
   history.replaceState(null, "", `${location.pathname}?${params}`);
@@ -77,10 +84,12 @@ function syncUrl(): void {
 
 function sceneState(scene: VisualScene): RenderState {
   const diagnostic = viewSelect.value === "semantic";
-  if (overlayInput.checked) return { ...scene.state, terrainDiagnostic: diagnostic };
+  const ambientAnimation = ambientInput.checked;
+  if (overlayInput.checked) return { ...scene.state, terrainDiagnostic: diagnostic, ambientAnimation };
   return {
     ...scene.state,
     terrainDiagnostic: diagnostic,
+    ambientAnimation,
     selected: null,
     showUnitUi: false,
     highlights: [],
@@ -107,7 +116,7 @@ function sizeCanvas(canvas: HTMLCanvasElement, state: RenderState, cell: number)
   canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function drawScene(scene: VisualScene, resize: boolean, nowMs = animateInput.checked ? performance.now() : STATIC_RENDER_TIME_MS): void {
+function drawScene(scene: VisualScene, resize: boolean, nowMs = motionEnabled() ? performance.now() : STATIC_RENDER_TIME_MS): void {
   const canvas = canvases.get(scene.id);
   if (!canvas) return;
   if (resize) sizeCanvas(canvas, scene.state, Number(cellInput.value));
@@ -125,8 +134,12 @@ function renderAll(resize = true): void {
   updateAnimation();
 }
 
+function motionEnabled(): boolean {
+  return (animateInput.checked || ambientInput.checked) && viewSelect.value !== "semantic";
+}
+
 function animationLoop(): void {
-  if (!animateInput.checked || document.hidden) {
+  if (!motionEnabled() || document.hidden) {
     animationFrame = 0;
     return;
   }
@@ -136,9 +149,9 @@ function animationLoop(): void {
 }
 
 function updateAnimation(): void {
-  if (animateInput.checked && !document.hidden && animationFrame === 0) {
+  if (motionEnabled() && !document.hidden && animationFrame === 0) {
     animationFrame = requestAnimationFrame(animationLoop);
-  } else if ((!animateInput.checked || document.hidden) && animationFrame !== 0) {
+  } else if ((!motionEnabled() || document.hidden) && animationFrame !== 0) {
     cancelAnimationFrame(animationFrame);
     animationFrame = 0;
   }
@@ -218,6 +231,7 @@ async function copyDiagnostics(): Promise<void> {
     backdrop: backdropSelect.value,
     overlays: overlayInput.checked,
     animation: animateInput.checked,
+    ambientAnimation: ambientInput.checked,
     devicePixelRatio: window.devicePixelRatio,
     viewport: { width: window.innerWidth, height: window.innerHeight },
     scenes: scenes.map(({ id, state }) => ({
@@ -240,6 +254,33 @@ function setStatus(message: string, error = false): void {
   status.style.color = error ? "var(--red)" : "var(--cyan)";
 }
 
+/**
+ * Design-review facts for a generated board: which noun anchors it, what
+ * supports it, how the composition was budgeted, and what roles the space has.
+ */
+function sceneFacts(scene: VisualScene): [string, string][] {
+  const diagnostics = generatedEncounterDiagnostics(scene.state.map);
+  const environment = scene.state.map.environment;
+  if (!diagnostics) {
+    if (!environment) return [];
+    return [["Landmarks", environment.landmarks.map(({ name }) => name).join(", ")]];
+  }
+  const supporting = diagnostics.landmarks.filter((landmark) => landmark.importance !== "dominant");
+  const metrics = diagnostics.metrics;
+  return [
+    ["Dominant feature", diagnostics.dominantLandmark
+      ? `${diagnostics.dominantLandmark.name} (${diagnostics.dominantLandmark.footprint} tiles, facing ${diagnostics.dominantLandmark.orientation}, ${diagnostics.dominantLandmark.ambient})`
+      : "none"],
+    ["Supporting features", supporting.length > 0
+      ? supporting.map((landmark) => `${landmark.name} [${landmark.importance}]`).join(", ")
+      : "none"],
+    ["Composition", `${diagnostics.profile} · budget ${diagnostics.featureBudget.major}/${diagnostics.featureBudget.secondary}/${diagnostics.featureBudget.minor} · dominance ×${metrics.dominantFootprintRatio.toFixed(2)}`],
+    ["Zone roles", diagnostics.zoneRoles.length > 0 ? diagnostics.zoneRoles.join(", ") : "none"],
+    ["Shape language", `aligned ${(metrics.alignedWallRatio * 100).toFixed(0)}% · symmetry ${(metrics.mirrorSymmetryRatio * 100).toFixed(0)}% · broken ends ${(metrics.wallEndpointRatio * 100).toFixed(0)}%`],
+    ["Restraint", `quiet floor ${(metrics.floorQuietnessRatio * 100).toFixed(0)}% · calm region ${metrics.largestCalmRegion} · cover owned ${(metrics.landmarkAdjacentCoverRatio * 100).toFixed(0)}%`],
+  ];
+}
+
 function buildSceneCard(scene: VisualScene, index: number): void {
     const article = document.createElement("article");
     article.className = "scene";
@@ -253,6 +294,7 @@ function buildSceneCard(scene: VisualScene, index: number): void {
     const diagnostics = generatedEncounterDiagnostics(scene.state.map);
     const budget = diagnostics?.featureBudget;
     kicker.textContent = `Scene ${index + 1} · ${scene.state.map.width}×${scene.state.map.height}` +
+      (diagnostics ? ` · ${diagnostics.profile}` : "") +
       (budget ? ` · budget ${budget.major}/${budget.secondary}/${budget.minor}` : "");
     const title = document.createElement("h2");
     title.textContent = scene.title;
@@ -262,6 +304,19 @@ function buildSceneCard(scene: VisualScene, index: number): void {
     review.className = "review";
     review.textContent = `Review: ${scene.review}`;
     copy.append(kicker, title, description, review);
+    const facts = sceneFacts(scene);
+    if (facts.length > 0) {
+      const list = document.createElement("dl");
+      list.className = "scene-facts";
+      for (const [label, value] of facts) {
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const detail = document.createElement("dd");
+        detail.textContent = value;
+        list.append(term, detail);
+      }
+      copy.append(list);
+    }
 
     const exportScene = document.createElement("button");
     exportScene.textContent = "Export PNG";
@@ -288,7 +343,8 @@ function buildSceneCards(): void {
 function inspectSeed(): void {
   const themeId = isLevelThemeId(inspectionTheme.value) ? inspectionTheme.value : "industrial";
   const seed = inspectionSeed.value.trim() || "REVIEW-SEED-1";
-  const generated = buildGeneratedThemeScene(themeId, seed);
+  const profile = inspectionProfile.value === "quiet" ? "quiet" : "landmark";
+  const generated = buildGeneratedThemeScene(themeId, seed, profile);
   const scene: VisualScene = {
     ...generated,
     id: "seed-inspection",
@@ -306,12 +362,12 @@ function inspectSeed(): void {
   drawScene(scene, true);
   syncUrl();
   document.getElementById(`scene-${scene.id}`)?.scrollIntoView({ behavior: "smooth" });
-  setStatus(`Generated ${themeId} seed ${seed}.`);
+  setStatus(`Generated ${themeId} ${profile} seed ${seed}.`);
 }
 
 function handleShortcut(event: KeyboardEvent): void {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-  if (/^[1-8]$/.test(event.key)) {
+  if (/^[1-9]$/.test(event.key)) {
     scenes[Number(event.key) - 1]?.id && document.getElementById(`scene-${scenes[Number(event.key) - 1].id}`)?.scrollIntoView({ behavior: "smooth" });
   } else if (event.key.toLowerCase() === "g") {
     viewSelect.value = viewSelect.value === "grayscale" ? "normal" : "grayscale";
@@ -333,6 +389,8 @@ viewSelect.addEventListener("change", () => renderAll(false));
 backdropSelect.addEventListener("change", () => renderAll(false));
 overlayInput.addEventListener("change", () => renderAll(false));
 animateInput.addEventListener("change", () => renderAll(false));
+ambientInput.addEventListener("change", () => renderAll(false));
+inspectionProfile.addEventListener("change", syncUrl);
 exportButton.addEventListener("click", exportContactSheet);
 diagnosticsButton.addEventListener("click", () => void copyDiagnostics());
 inspectionButton.addEventListener("click", inspectSeed);

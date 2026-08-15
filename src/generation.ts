@@ -16,11 +16,26 @@ import {
 } from "./generationAnalysis.ts";
 import { paintBoundary, type MotifId, type Point } from "./generationMotifs.ts";
 import { buildThemeLayout, type MacroZone, type ThemeLayout } from "./generationThemes.ts";
+import {
+  dominantLandmark,
+  environmentProfile,
+  landmarkAmbient,
+  landmarkOrientation,
+  type MapLandmark,
+} from "./environment.ts";
 import { createEmptyMap, getTile, type GameMap } from "./map.ts";
 import { SeededRng } from "./rng.ts";
 import { LEVEL_THEME_IDS, type LevelThemeId } from "./themes.ts";
 import { validateMap } from "./validation.ts";
-import type { FeatureBudget, LandmarkKind } from "./environment.ts";
+import type {
+  EnvironmentProfile,
+  FeatureBudget,
+  LandmarkAmbient,
+  LandmarkImportance,
+  LandmarkKind,
+  LandmarkOrientation,
+  ZoneRole,
+} from "./environment.ts";
 
 export type EncounterKind = "combat" | "elite" | "final";
 
@@ -42,13 +57,26 @@ export const ENCOUNTER_WIDTH = 24;
 export const ENCOUNTER_HEIGHT = 24;
 const MAX_LAYOUT_ATTEMPTS = 8;
 
+export type DiagnosticLandmark = {
+  name: string;
+  kind: LandmarkKind;
+  importance: LandmarkImportance;
+  orientation: LandmarkOrientation;
+  ambient: LandmarkAmbient;
+  footprint: number;
+};
+
 export type EncounterGenerationDiagnostics = {
   themeId: LevelThemeId;
+  profile: EnvironmentProfile;
   attempt: number;
   repairCount: number;
   motifs: readonly MotifId[];
   zones: readonly Pick<MacroZone, "id" | "purpose">[];
-  landmarks: readonly { name: string; kind: LandmarkKind; importance: "major" | "secondary" }[];
+  /** The single feature the composition is built around, if one exists. */
+  dominantLandmark: DiagnosticLandmark | null;
+  landmarks: readonly DiagnosticLandmark[];
+  zoneRoles: readonly ZoneRole[];
   featureBudget: FeatureBudget;
   metrics: GeneratedMapMetrics;
 };
@@ -174,14 +202,34 @@ function candidateScore(candidate: Candidate): number {
   return candidate.issues.length * 100 + metrics.openingFirePairs * 8 + metrics.floorRegionCount * 20;
 }
 
+function describeLandmark(landmark: MapLandmark): DiagnosticLandmark {
+  return {
+    name: landmark.name,
+    kind: landmark.kind,
+    importance: landmark.importance,
+    orientation: landmarkOrientation(landmark),
+    ambient: landmarkAmbient(landmark),
+    footprint: landmark.rect.width * landmark.rect.height,
+  };
+}
+
 function rememberDiagnostics(candidate: Candidate): GameMap {
+  const environment = candidate.map.environment;
+  const dominant = dominantLandmark(environment);
+  const roles = new Set<ZoneRole>();
+  for (const zone of environment?.floorZones ?? []) {
+    if (zone.role) roles.add(zone.role);
+  }
   encounterDiagnostics.set(candidate.map, {
     themeId: candidate.map.themeId!,
+    profile: environmentProfile(environment),
     attempt: candidate.attempt,
     repairCount: candidate.repairCount,
     motifs: [...candidate.layout.motifs],
     zones: candidate.layout.zones.map(({ id, purpose }) => ({ id, purpose })),
-    landmarks: candidate.layout.landmarks.map(({ name, kind, importance }) => ({ name, kind, importance })),
+    dominantLandmark: dominant ? describeLandmark(dominant) : null,
+    landmarks: candidate.layout.landmarks.map(describeLandmark),
+    zoneRoles: [...roles],
     featureBudget: { ...candidate.layout.featureBudget },
     metrics: candidate.metrics,
   });

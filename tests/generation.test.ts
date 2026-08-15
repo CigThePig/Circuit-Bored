@@ -10,7 +10,8 @@ import { SeededRng } from "../src/rng.ts";
 import { cloneMap, getTile, makeUnit } from "../src/map.ts";
 import { validateMap } from "../src/validation.ts";
 import { canShootTarget } from "../src/combat.ts";
-import { analyzeGeneratedMap, validateGeneratedMap } from "../src/generationAnalysis.ts";
+import { analyzeGeneratedMap, validateGeneratedMap, type GeneratedMapMetrics } from "../src/generationAnalysis.ts";
+import { LANDMARK_AMBIENTS, LANDMARK_ORIENTATIONS, MAX_LANDMARK_VARIANT } from "../src/environment.ts";
 import { LEVEL_THEME_IDS } from "../src/themes.ts";
 import { beginEnemyTurn, takeEnemyAction } from "../src/ai.ts";
 import { createAiSession } from "../src/aiSession.ts";
@@ -72,6 +73,20 @@ describe("procedural encounters", () => {
       expect(metrics.floorQuietnessRatio).toBeGreaterThanOrEqual(0.5);
       expect(metrics.highAttentionFloorRatio).toBeLessThanOrEqual(0.1);
       expect(metrics.largestCalmRegion).toBeGreaterThanOrEqual(80);
+      // Exactly one feature anchors the board, and it stays clearly larger
+      // than whatever supports it.
+      const environment = map.environment!;
+      expect(environment.landmarks.filter(({ importance }) => importance === "dominant")).toHaveLength(1);
+      expect(metrics.dominantFootprintRatio).toBeGreaterThanOrEqual(1.25);
+      expect(metrics.dominantFootprint).toBeGreaterThanOrEqual(60);
+      expect(metrics.landmarkAdjacentCoverRatio).toBeGreaterThanOrEqual(0.45);
+      expect(["quiet", "heavy"]).toContain(environment.profile);
+      for (const landmark of environment.landmarks) {
+        expect(LANDMARK_ORIENTATIONS).toContain(landmark.orientation);
+        expect(LANDMARK_AMBIENTS).toContain(landmark.ambient);
+        expect(landmark.variant).toBeGreaterThanOrEqual(0);
+        expect(landmark.variant).toBeLessThanOrEqual(MAX_LANDMARK_VARIANT);
+      }
       seenThemes.add(metrics.themeId);
       const signatures = layoutsByTheme.get(metrics.themeId) ?? new Set<string>();
       signatures.add(map.tiles.join(""));
@@ -106,7 +121,7 @@ describe("procedural encounters", () => {
     const derelictKinds = new Set(maps.derelict.environment!.landmarks.map(({ kind }) => kind));
     expect([...industrialKinds].some((kind) => ["furnace_block", "coolant_tanks", "processing_line"].includes(kind))).toBe(true);
     expect([...dataKinds].some((kind) => ["server_vault", "data_core"].includes(kind))).toBe(true);
-    expect([...derelictKinds].some((kind) => ["collapsed_room", "scrap_heap"].includes(kind))).toBe(true);
+    expect([...derelictKinds].some((kind) => ["collapsed_room", "scrap_heap", "reactor_wreck"].includes(kind))).toBe(true);
     expect(new Set([...industrialKinds, ...dataKinds, ...derelictKinds]).size).toBeGreaterThanOrEqual(8);
     for (const map of Object.values(maps)) {
       const diagnostics = generatedEncounterDiagnostics(map)!;
@@ -117,6 +132,76 @@ describe("procedural encounters", () => {
       expect(diagnostics.landmarks).toHaveLength(map.environment!.landmarks.length);
       expect(diagnostics.featureBudget).toEqual(map.environment!.featureBudget);
     }
+  });
+
+  it("gives each theme a shape language that survives grayscale and semantic review", () => {
+    const run = createRun("SHAPE-LANGUAGE");
+    const samples: Record<string, GeneratedMapMetrics[]> = { industrial: [], data_core: [], derelict: [] };
+    for (let seed = 0; seed < 60; seed++) {
+      for (const themeId of LEVEL_THEME_IDS) {
+        const map = generateEncounter(new SeededRng(`shape-${seed}`), seed % 7, "elite", run.squad, [], { themeId });
+        samples[themeId].push(analyzeGeneratedMap(map));
+      }
+    }
+    const worst = (themeId: string, key: keyof GeneratedMapMetrics) =>
+      Math.min(...samples[themeId].map((metrics) => metrics[key] as number));
+    const best = (themeId: string, key: keyof GeneratedMapMetrics) =>
+      Math.max(...samples[themeId].map((metrics) => metrics[key] as number));
+    const mean = (themeId: string, key: keyof GeneratedMapMetrics) =>
+      samples[themeId].reduce((sum, metrics) => sum + (metrics[key] as number), 0) / samples[themeId].length;
+
+    // Foundry: long aligned industrial runs, on every single board.
+    expect(worst("industrial", "longestWallRun")).toBeGreaterThanOrEqual(8);
+    expect(worst("industrial", "alignedWallRatio")).toBeGreaterThanOrEqual(0.58);
+    expect(mean("industrial", "alignedWallRatio")).toBeGreaterThan(mean("derelict", "alignedWallRatio") + 0.2);
+    // Data Core: deliberate, near-symmetrical engineering. The gap here is
+    // wide enough to hold worst-case against every other family's best case.
+    expect(worst("data_core", "mirrorSymmetryRatio")).toBeGreaterThan(best("industrial", "mirrorSymmetryRatio"));
+    expect(worst("data_core", "mirrorSymmetryRatio")).toBeGreaterThan(best("derelict", "mirrorSymmetryRatio"));
+    // Derelict: interrupted structure that never closes cleanly.
+    expect(mean("derelict", "wallEndpointRatio")).toBeGreaterThan(mean("industrial", "wallEndpointRatio") + 0.1);
+    expect(mean("derelict", "alignedWallRatio")).toBeLessThan(mean("data_core", "alignedWallRatio") - 0.2);
+    expect(best("derelict", "alignedWallRatio")).toBeLessThanOrEqual(0.8);
+    expect(best("derelict", "mirrorSymmetryRatio")).toBeLessThan(0.88);
+  }, 30_000);
+
+  it("separates quiet and heavy compositions by environment, not only by density", () => {
+    const run = createRun("PROFILE-CONTRAST");
+    for (const themeId of LEVEL_THEME_IDS) {
+      const quiet = generateEncounter(new SeededRng(`profile-${themeId}`), 1, "combat", run.squad, [], { themeId });
+      const heavy = generateEncounter(new SeededRng(`profile-${themeId}`), 6, "final", run.squad, [], { themeId });
+      expect(quiet.environment!.profile).toBe("quiet");
+      expect(heavy.environment!.profile).toBe("heavy");
+      // Quiet keeps a single, larger anchor and far fewer supporting nouns.
+      expect(quiet.environment!.landmarks).toHaveLength(2);
+      expect(heavy.environment!.landmarks).toHaveLength(4);
+      const quietMetrics = analyzeGeneratedMap(quiet);
+      const heavyMetrics = analyzeGeneratedMap(heavy);
+      expect(quietMetrics.dominantFootprint).toBeGreaterThan(heavyMetrics.dominantFootprint);
+      expect(quietMetrics.floorQuietnessRatio).toBeGreaterThan(heavyMetrics.floorQuietnessRatio);
+      expect(heavyMetrics.landmarkCount).toBeGreaterThan(quietMetrics.landmarkCount);
+      // Both stay tactically viable rather than one becoming an empty room.
+      expect(validateGeneratedMap(quiet)).toEqual([]);
+      expect(validateGeneratedMap(heavy)).toEqual([]);
+      expect(quietMetrics.largestOpenSquare).toBeLessThanOrEqual(9);
+    }
+  });
+
+  it("turns landmark facing with the board so bespoke art never faces a wall", () => {
+    const run = createRun("ORIENTATION");
+    const seen = new Set<string>();
+    for (let seed = 0; seed < 90; seed++) {
+      const themeId = LEVEL_THEME_IDS[seed % LEVEL_THEME_IDS.length];
+      const map = generateEncounter(new SeededRng(`orient-${seed}`), 4, "elite", run.squad, [], { themeId });
+      for (const landmark of map.environment!.landmarks) {
+        seen.add(landmark.orientation!);
+        const { rect } = landmark;
+        expect(rect.x + rect.width).toBeLessThanOrEqual(map.width);
+        expect(rect.y + rect.height).toBeLessThanOrEqual(map.height);
+      }
+    }
+    // Rotation and mirroring must produce every facing, not just the authored one.
+    expect(seen).toEqual(new Set(["n", "e", "s", "w"]));
   });
 
   it("keeps AI mobile across rooms, connectors, and long flank routes", () => {

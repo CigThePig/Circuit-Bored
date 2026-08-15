@@ -3,6 +3,29 @@ import {
   type UnitArchetypeId,
 } from "../src/content.ts";
 import { generateEncounter } from "../src/generation.ts";
+import {
+  paintBreachedCorridor,
+  paintCollapsedRoom,
+  paintControlHub,
+  paintCoolantTanks,
+  paintCraneGantry,
+  paintDataCore,
+  paintFurnaceBlock,
+  paintLoadingBay,
+  paintPipeManifold,
+  paintProcessingLine,
+  paintReactorWreck,
+  paintRelayBank,
+  paintSalvageRig,
+  paintScrapHeap,
+  paintSecurityCheckpoint,
+  paintServerRows,
+  paintServerVault,
+  paintWreckedMachinery,
+  type LandmarkPlacement,
+} from "../src/generationLandmarks.ts";
+import { paintBoundary } from "../src/generationMotifs.ts";
+import { dominantLandmark, environmentProfile, type MapRect } from "../src/environment.ts";
 import { setTile, type GameMap } from "../src/map.ts";
 import { previewShot } from "../src/combat.ts";
 import {
@@ -28,6 +51,94 @@ function emptyMap(width: number, height: number): GameMap {
     tiles: new Array(width * height).fill("floor"),
     units: [],
   };
+}
+
+type GalleryEntry = {
+  slot: MapRect;
+  paint: (map: GameMap, rect: MapRect) => LandmarkPlacement;
+};
+
+/**
+ * A themed landmark gallery. Every board here is painted by the production
+ * landmark painters and rendered by the production renderer, so the lab can
+ * answer "does this actually look like a furnace?" without playing a run.
+ */
+function landmarkGalleryScene(
+  id: string,
+  themeId: LevelThemeId,
+  entries: readonly GalleryEntry[],
+  lanes: readonly { x: number; y: number }[],
+  review: string,
+): VisualScene {
+  const map = emptyMap(32, 22);
+  map.themeId = themeId;
+  paintBoundary(map);
+  const landmarks = [];
+  const floorZones = [];
+  for (const entry of entries) {
+    const placement = entry.paint(map, entry.slot);
+    landmarks.push(placement.landmark);
+    floorZones.push(...placement.floorZones);
+  }
+  map.environment = { landmarks, floorZones, featureBudget: { major: 2, secondary: 2, minor: 2 }, profile: "heavy" };
+  // Two units give the gallery a scale reference and keep the board a legal
+  // map, so the same validation that guards encounters guards the lab too.
+  for (const lane of lanes) {
+    for (const offset of [-1, 0, 1]) {
+      setTile(map, lane.x + offset, lane.y, "floor");
+      setTile(map, lane.x, lane.y + offset, "floor");
+    }
+  }
+  map.units.push(
+    makeArchetypeUnit("operator", `${id}-player`, lanes[0].x, lanes[0].y),
+    makeArchetypeUnit("rifleman", `${id}-enemy`, lanes[1].x, lanes[1].y),
+  );
+  return {
+    id,
+    title: `${LEVEL_THEMES[themeId].shortName} · landmark gallery`,
+    description: `Every ${LEVEL_THEMES[themeId].shortName} landmark family drawn by the production renderer: ` +
+      `${landmarks.map(({ name }) => name).join(", ")}.`,
+    review,
+    state: emptyState(map),
+  };
+}
+
+// Gallery slots are sized like the footprints the generator actually hands
+// each family, so a conveyor gets a long run and a vault gets a chamber.
+function foundryGalleryScene(): VisualScene {
+  return landmarkGalleryScene("landmarks-foundry", "industrial", [
+    { slot: { x: 2, y: 2, width: 9, height: 9 }, paint: (map, rect) => paintFurnaceBlock(map, rect, { orientation: "s", variant: 0 }) },
+    { slot: { x: 12, y: 2, width: 8, height: 9 }, paint: (map, rect) => paintCoolantTanks(map, rect, { id: "gallery-coolant", orientation: "s", variant: 1 }) },
+    { slot: { x: 21, y: 2, width: 9, height: 9 }, paint: (map, rect) => paintCraneGantry(map, rect, { id: "gallery-crane", variant: 0 }) },
+    { slot: { x: 2, y: 13, width: 18, height: 3 }, paint: (map, rect) => paintProcessingLine(map, rect, { id: "gallery-line", variant: 0 }) },
+    { slot: { x: 21, y: 13, width: 9, height: 4 }, paint: (map, rect) => paintPipeManifold(map, rect, { id: "gallery-manifold", variant: 1 }) },
+    { slot: { x: 2, y: 18, width: 12, height: 3 }, paint: (map, rect) => paintLoadingBay(map, rect, { id: "gallery-bay", orientation: "s", variant: 2 }) },
+  ], [{ x: 15, y: 19 }, { x: 25, y: 19 }],
+  "Each mass should read as a specific machine: furnace mouth, pressure vessels, gantry, conveyor, manifold, dock.");
+}
+
+function dataCoreGalleryScene(): VisualScene {
+  return landmarkGalleryScene("landmarks-data-core", "data_core", [
+    { slot: { x: 2, y: 2, width: 10, height: 10 }, paint: (map, rect) => paintServerVault(map, rect, { orientation: "s", variant: 0 }) },
+    { slot: { x: 13, y: 2, width: 9, height: 10 }, paint: (map, rect) => paintDataCore(map, rect, { id: "gallery-core", variant: 1 }) },
+    { slot: { x: 23, y: 2, width: 7, height: 6 }, paint: (map, rect) => paintControlHub(map, rect, { id: "gallery-hub", orientation: "s", variant: 2 }) },
+    { slot: { x: 2, y: 14, width: 5, height: 7 }, paint: (map, rect) => paintServerRows(map, rect, { id: "gallery-rows", variant: 1 }) },
+    { slot: { x: 8, y: 14, width: 8, height: 5 }, paint: (map, rect) => paintRelayBank(map, rect, { id: "gallery-relay", variant: 0 }) },
+    { slot: { x: 17, y: 14, width: 13, height: 3 }, paint: (map, rect) => paintSecurityCheckpoint(map, rect, { id: "gallery-checkpoint", variant: 0 }) },
+  ], [{ x: 25, y: 11 }, { x: 25, y: 20 }],
+  "Vault door, core pillar, console horseshoe, rack rhythm, cable trays, and gate posts should each be identifiable.");
+}
+
+function derelictGalleryScene(): VisualScene {
+  return landmarkGalleryScene("landmarks-derelict", "derelict", [
+    { slot: { x: 2, y: 2, width: 10, height: 10 }, paint: (map, rect) => paintCollapsedRoom(map, rect, { variant: 0 }) },
+    { slot: { x: 13, y: 2, width: 9, height: 10 }, paint: (map, rect) => paintReactorWreck(map, rect, { id: "gallery-reactor", variant: 2 }) },
+    { slot: { x: 23, y: 2, width: 7, height: 8 }, paint: (map, rect) => paintScrapHeap(map, rect, { id: "gallery-scrap", variant: 1 }) },
+    { slot: { x: 2, y: 14, width: 9, height: 7 }, paint: (map, rect) => paintWreckedMachinery(map, rect, { id: "gallery-wreck", variant: 1 }) },
+    { slot: { x: 12, y: 14, width: 8, height: 7 }, paint: (map, rect) => paintSalvageRig(map, rect, { id: "gallery-rig", variant: 3 }) },
+    { slot: { x: 21, y: 14, width: 9, height: 6 }, paint: (map, rect) => paintBreachedCorridor(map, rect, { id: "gallery-breach", variant: 0 }) },
+  ], [{ x: 26, y: 12 }, { x: 17, y: 12 }],
+  "Collapse, failed reactor, scrap mound, torn machine, improvised rig, and blast breach should all read as damage, not as tidy geometry.");
 }
 
 function emptyState(map: GameMap): RenderState {
@@ -286,15 +397,21 @@ export function buildGeneratedThemeScene(
   );
   const state = emptyState(map);
   state.selected = map.units.find((unit) => unit.team === "player") ?? null;
-  const landmarkNames = map.environment?.landmarks.map(({ name }) => name).join(", ") ?? "legacy map";
+  const dominant = dominantLandmark(map.environment);
+  const supporting = (map.environment?.landmarks ?? [])
+    .filter((landmark) => landmark !== dominant)
+    .map(({ name }) => name);
+  const composition = environmentProfile(map.environment);
 
   return {
     id: `generated-${themeId.replace("_", "-")}-${profile}`,
     title: `${LEVEL_THEMES[themeId].shortName} · ${profile === "landmark" ? "landmark-heavy" : "quiet"}`,
-    description: `Fixed seed ${seed}. Named places: ${landmarkNames}. ${LEVEL_THEMES[themeId].tacticalCharacter}`,
+    description: `Fixed seed ${seed}. Dominant feature: ${dominant?.name ?? "none"}. ` +
+      `Supporting: ${supporting.length > 0 ? supporting.join(", ") : "none"}. ` +
+      `Composition: ${composition}. ${LEVEL_THEMES[themeId].tacticalCharacter}`,
     review: profile === "landmark"
-      ? "Identify the major places from geometry in grayscale and confirm that each landmark shapes routes, sight, or cover."
-      : "Confirm broad ordinary floor stays calm, unmistakably walkable, and subordinate to the limited feature budget.",
+      ? "The dominant feature should still win the eye while supporting structures add context rather than competing with it."
+      : "Confirm one feature clearly anchors the board and that broad ordinary floor stays calm and unmistakably walkable.",
     state,
   };
 }
@@ -305,6 +422,9 @@ export function buildVisualScenes(): VisualScene[] {
     unitScene(),
     overlayScene(),
     effectsScene(),
+    foundryGalleryScene(),
+    dataCoreGalleryScene(),
+    derelictGalleryScene(),
     buildGeneratedThemeScene("industrial", "FOUNDRY-LANDMARK-41", "landmark"),
     buildGeneratedThemeScene("industrial", "FOUNDRY-QUIET-12", "quiet"),
     buildGeneratedThemeScene("data_core", "DATA-VAULT-17", "landmark"),

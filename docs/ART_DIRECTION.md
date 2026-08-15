@@ -35,16 +35,76 @@ Lower levels must never obscure higher levels.
 - Overlay graphics must not cover faces, HP, or the weapon silhouette.
 - Never show a firing line when the action cannot be afforded.
 
+## Bespoke landmark artwork
+
+- A major feature is drawn as one multi-tile object, not as decorated squares.
+  `renderLandmarks.ts` owns that artwork and keys it off stable environment
+  metadata: kind, footprint, orientation, sub-variant, and ambient family.
+- Landmark artwork is clipped to the wall tiles of its footprint, minus the
+  raised lip the tile renderer paints on every edge facing walkable space. The
+  bright player-facing lip and the dark occlusion edge therefore survive
+  untouched, and artwork can never make floor or half cover look blocked.
+- Half cover is excluded from every landmark clip. A cover object keeps its own
+  raised silhouette even when it stands inside a landmark footprint.
+- The only floor pixels landmark art owns are a soft contact shadow at the
+  object's south and east edges. Everything else on the floor belongs to the
+  regional treatment system.
+- A landmark's artwork is derived from the solid masses actually present in its
+  footprint, so the object always lines up with the geometry the generator
+  produced. Face detail (a furnace mouth, a vault door) anchors to real
+  structure and never lands in a doorway.
+
+## Ambient motion
+
+- Only landmarks animate. Ordinary floor, ordinary walls, and ordinary cover
+  are completely still, and that contrast is the point.
+- Motion is low frequency (roughly 1.9 s to 4.2 s cycles), localized, and
+  attenuated for secondary structures. Blinking beacons are reserved for
+  dominant and major features.
+- Every ambient value is a pure function of the frame timestamp plus the
+  landmark's id, so a given frame always renders identically.
+- Ambient motion never encodes gameplay state. If a cue matters tactically it
+  belongs to the overlay layer, not to environmental art.
+
+## Feature hierarchy
+
+- Every generated encounter has exactly one **dominant** feature, at least
+  1.25x the footprint of anything else on the board. It anchors the eye, shapes
+  routes, and is what the player should remember afterwards.
+- **Major** features support the anchor. **Secondary** structures support the
+  majors. Small props (crates, barricades, consoles, markers) reinforce a
+  zone's function and must never be the reason a board looks interesting.
+- Dominant and major features own the space around them through an apron zone:
+  a machine service ring, a debris field, or a controlled approach in front of
+  a threshold. Cover is placed by function inside that owned space.
+- A quiet encounter carries one larger anchor and more negative space; a heavy
+  encounter keeps the same anchor and adds supporting context, not density.
+
+## Theme shape language
+
+Geometry, not palette, has to separate the families. These are measured in
+`generationAnalysis.ts` and enforced during generation.
+
+- **Foundry**: long aligned runs (a wall run of eight or more), chunky
+  asymmetric equipment masses, parallel processing lines, broad service aprons.
+- **Data Core**: near-mirror symmetry across the board axis, precise
+  compartments with two-tile doors, repeated rack rhythm, controlled
+  thresholds.
+- **Derelict**: broken outlines that never close, offset masses that slip out
+  of alignment, terminating stubs, capped debris that hugs its structure.
+
 ## Review sizes
 
 - 28 px: minimum-detail/mobile stress case.
 - 40 px: normal detail review for encounters; generated 24×24 maps scroll in the lab rather than shrinking below readability.
 - 56 px: detail and shape inspection.
 
-Review the terrain contact sheet, unit lineup, overlay matrix, and generated
-landmark-heavy and quiet encounter examples at all three sizes before approving
-a renderer change. Use Semantic categories to separate generation hierarchy
-problems from decorative-art problems.
+Review the terrain contact sheet, unit lineup, overlay matrix, the three
+landmark galleries, and the generated landmark-heavy and quiet encounter
+examples at all three sizes before approving a renderer change. Use Semantic
+categories to separate generation hierarchy problems from decorative-art
+problems: the dominant feature is outlined in orange, majors in yellow, and
+secondaries with a dashed white rule.
 
 ## Macro identity and restraint
 
