@@ -166,6 +166,11 @@
       #canvas-wrap {
         position: relative;
         width: 100%;
+        /* Keep the tactical board itself scrollable on short screens. The HUD
+           remains below this viewport instead of being pushed past the board's
+           selected unit when a layout puts the squad near the bottom edge. */
+        height: min(672px, max(240px, calc(100vh - 164px)));
+        height: min(672px, max(240px, calc(100dvh - 164px)));
         isolation: isolate;
         overflow: auto;
         overscroll-behavior: contain;
