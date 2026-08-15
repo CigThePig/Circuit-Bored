@@ -3,7 +3,7 @@ import { environmentVariant, resizeCanvasForMap } from "../src/render.ts";
 import { createEmptyMap } from "../src/map.ts";
 
 describe("procedural environment art", () => {
-  it("is deterministic and supplies multiple readable variants per tile role", () => {
+  it("keeps ordinary floor deterministic and deliberately quieter than tactical objects", () => {
     expect(environmentVariant("floor", 4, 7)).toBe(environmentVariant("floor", 4, 7));
 
     const coordinates = Array.from({ length: 144 }, (_, index) => ({
@@ -14,7 +14,8 @@ describe("procedural environment art", () => {
     const wall = new Set(coordinates.map(({ x, y }) => environmentVariant("wall", x, y, "industrial")));
     const cover = new Set(coordinates.map(({ x, y }) => environmentVariant("half_cover", x, y, "industrial")));
 
-    expect(floor).toEqual(new Set(["deck", "service_hatch", "vent", "conduit"]));
+    expect(floor).toEqual(new Set(["deck", "service_hatch"]));
+    expect(floor.has("conduit")).toBe(false);
     expect(wall).toEqual(new Set(["bulkhead", "pipe_bank", "system_panel"]));
     expect(cover).toEqual(new Set(["cargo", "barricade", "machinery"]));
   });
@@ -29,9 +30,11 @@ describe("procedural environment art", () => {
     const industrial = family("industrial");
     const dataCore = family("data_core");
     const derelict = family("derelict");
-    expect(industrial.size).toBe(10);
-    expect(dataCore.size).toBe(9);
-    expect(derelict.size).toBe(10);
+    expect(industrial.size).toBe(8);
+    expect(dataCore.size).toBe(8);
+    expect(derelict.size).toBe(9);
+    expect([...dataCore]).not.toContain("illuminated_strip");
+    expect([...derelict]).not.toContain("exposed_conduit");
     expect([...industrial].filter((variant) => dataCore.has(variant))).toEqual([]);
     expect([...dataCore].filter((variant) => derelict.has(variant))).toEqual([]);
   });

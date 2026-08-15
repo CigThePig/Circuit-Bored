@@ -20,6 +20,7 @@ import { createEmptyMap, getTile, type GameMap } from "./map.ts";
 import { SeededRng } from "./rng.ts";
 import { LEVEL_THEME_IDS, type LevelThemeId } from "./themes.ts";
 import { validateMap } from "./validation.ts";
+import type { FeatureBudget, LandmarkKind } from "./environment.ts";
 
 export type EncounterKind = "combat" | "elite" | "final";
 
@@ -47,6 +48,8 @@ export type EncounterGenerationDiagnostics = {
   repairCount: number;
   motifs: readonly MotifId[];
   zones: readonly Pick<MacroZone, "id" | "purpose">[];
+  landmarks: readonly { name: string; kind: LandmarkKind; importance: "major" | "secondary" }[];
+  featureBudget: FeatureBudget;
   metrics: GeneratedMapMetrics;
 };
 
@@ -160,13 +163,14 @@ function addSquads(
 type Candidate = {
   map: GameMap;
   issues: TacticalQualityIssue[];
+  metrics: GeneratedMapMetrics;
   layout: ThemeLayout;
   attempt: number;
   repairCount: number;
 };
 
 function candidateScore(candidate: Candidate): number {
-  const metrics = analyzeGeneratedMap(candidate.map);
+  const metrics = candidate.metrics;
   return candidate.issues.length * 100 + metrics.openingFirePairs * 8 + metrics.floorRegionCount * 20;
 }
 
@@ -177,7 +181,9 @@ function rememberDiagnostics(candidate: Candidate): GameMap {
     repairCount: candidate.repairCount,
     motifs: [...candidate.layout.motifs],
     zones: candidate.layout.zones.map(({ id, purpose }) => ({ id, purpose })),
-    metrics: analyzeGeneratedMap(candidate.map, candidate.layout.contestedPoints),
+    landmarks: candidate.layout.landmarks.map(({ name, kind, importance }) => ({ name, kind, importance })),
+    featureBudget: { ...candidate.layout.featureBudget },
+    metrics: candidate.metrics,
   });
   return candidate.map;
 }
@@ -204,9 +210,11 @@ export function generateEncounter(
         const first = baseReport.issues.find((issue) => issue.severity === "error");
         throw new Error(`Generated invalid encounter: ${first?.code ?? "UNKNOWN"}`);
       }
+      const metrics = analyzeGeneratedMap(map, layout.contestedPoints);
       const candidate = {
         map,
-        issues: validateGeneratedMap(map, layout.contestedPoints),
+        issues: validateGeneratedMap(map, layout.contestedPoints, metrics),
+        metrics,
         layout,
         attempt,
         repairCount,

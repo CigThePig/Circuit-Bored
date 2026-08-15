@@ -7,6 +7,7 @@ import {
   DEFAULT_LEVEL_THEME_ID,
   type LevelThemeId,
 } from "./themes.ts";
+import type { MapEnvironment } from "./environment.ts";
 
 export type TileType = "floor" | "wall" | "half_cover";
 
@@ -75,6 +76,8 @@ export type GameMap = {
   units: Unit[];
   /** Stable encounter identity. Older editor maps and saves default to the foundry. */
   themeId?: LevelThemeId;
+  /** Optional generated-space identity used by landmarks and regional terrain art. */
+  environment?: MapEnvironment;
 };
 
 export const MAP_W = 16;
@@ -151,6 +154,11 @@ export function cloneMap(map: GameMap): GameMap {
     height: map.height,
     tiles: [...map.tiles],
     themeId: map.themeId ?? DEFAULT_LEVEL_THEME_ID,
+    environment: map.environment ? {
+      featureBudget: { ...map.environment.featureBudget },
+      landmarks: map.environment.landmarks.map((landmark) => ({ ...landmark, rect: { ...landmark.rect } })),
+      floorZones: map.environment.floorZones.map((zone) => ({ ...zone, rect: { ...zone.rect } })),
+    } : undefined,
     units: map.units.map((u) => ({
       ...u,
       peekExposure: u.peekExposure ? { ...u.peekExposure } : null,

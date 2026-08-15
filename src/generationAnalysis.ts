@@ -2,12 +2,20 @@ import { canShootTarget } from "./combat.ts";
 import { getTile, inBounds, setTile, type GameMap, type TileType, type Unit } from "./map.ts";
 import { levelThemeId, type LevelThemeId } from "./themes.ts";
 import type { Point } from "./generationMotifs.ts";
+import { pointInRect } from "./environment.ts";
 
 const DIRECTIONS = [
   { x: 1, y: 0 },
   { x: -1, y: 0 },
   { x: 0, y: 1 },
   { x: 0, y: -1 },
+] as const;
+const COVER_NEIGHBORS = [
+  ...DIRECTIONS,
+  { x: 1, y: 1 },
+  { x: 1, y: -1 },
+  { x: -1, y: 1 },
+  { x: -1, y: -1 },
 ] as const;
 
 export type GeneratedMapMetrics = {
@@ -28,6 +36,13 @@ export type GeneratedMapMetrics = {
   corridorTileCount: number;
   mandatoryChokeCount: number;
   contestedCoverPositions: number;
+  landmarkCount: number;
+  majorLandmarkCount: number;
+  secondaryStructureCount: number;
+  largestLandmarkFootprint: number;
+  floorQuietnessRatio: number;
+  highAttentionFloorRatio: number;
+  largestCalmRegion: number;
 };
 
 export type TacticalQualityIssue = {
@@ -196,7 +211,7 @@ function wallJunctionCount(map: GameMap): number {
 function clusteredCoverRatio(map: GameMap): number {
   const cover = tilePoints(map, "half_cover");
   if (cover.length === 0) return 0;
-  const clustered = cover.filter((point) => DIRECTIONS.some((direction) => {
+  const clustered = cover.filter((point) => COVER_NEIGHBORS.some((direction) => {
     const tile = getTile(map, point.x + direction.x, point.y + direction.y);
     return tile === "wall" || tile === "half_cover";
   })).length;
@@ -346,6 +361,73 @@ function contestedCoverPositions(map: GameMap, contestedPoints: readonly Point[]
   })).length;
 }
 
+function environmentHierarchy(map: GameMap): Pick<GeneratedMapMetrics,
+  "landmarkCount" | "majorLandmarkCount" | "secondaryStructureCount" |
+  "largestLandmarkFootprint" | "floorQuietnessRatio" | "highAttentionFloorRatio" | "largestCalmRegion"
+> {
+  const environment = map.environment;
+  const floors = tilePoints(map, "floor");
+  if (!environment || floors.length === 0) {
+    return {
+      landmarkCount: 0,
+      majorLandmarkCount: 0,
+      secondaryStructureCount: 0,
+      largestLandmarkFootprint: 0,
+      floorQuietnessRatio: 1,
+      highAttentionFloorRatio: 0,
+      largestCalmRegion: floors.length,
+    };
+  }
+  const treated = new Set<string>();
+  const attention = new Set<string>();
+  for (const point of floors) {
+    for (const zone of environment.floorZones) {
+      if (!pointInRect(point.x, point.y, zone.rect)) continue;
+      const localX = point.x - zone.rect.x;
+      const localY = point.y - zone.rect.y;
+      treated.add(pointKey(point));
+      const centerX = Math.floor((zone.rect.width - 1) / 2);
+      const centerY = Math.floor((zone.rect.height - 1) / 2);
+      const vertical = zone.rect.height > zone.rect.width;
+      const highAttention =
+        ((zone.treatment === "service_lane" || zone.treatment === "server_hall") &&
+          ((vertical && localX === centerX) || (!vertical && localY === centerY))) ||
+        (zone.treatment === "checkpoint_threshold" && localY === centerY) ||
+        (zone.treatment === "loading_apron" && (localY === 1 || localY === zone.rect.height - 2));
+      if (highAttention) attention.add(pointKey(point));
+    }
+  }
+  const quiet = floors.filter((point) => !treated.has(pointKey(point)));
+  const quietKeys = new Set(quiet.map(pointKey));
+  let largestCalmRegion = 0;
+  while (quietKeys.size > 0) {
+    const start = quietKeys.values().next().value as string;
+    quietKeys.delete(start);
+    const queue = [start];
+    let size = 0;
+    while (queue.length > 0) {
+      const key = queue.shift()!;
+      size += 1;
+      const [x, y] = key.split(",").map(Number);
+      for (const direction of DIRECTIONS) {
+        const next = `${x + direction.x},${y + direction.y}`;
+        if (!quietKeys.delete(next)) continue;
+        queue.push(next);
+      }
+    }
+    largestCalmRegion = Math.max(largestCalmRegion, size);
+  }
+  return {
+    landmarkCount: environment.landmarks.length,
+    majorLandmarkCount: environment.landmarks.filter(({ importance }) => importance === "major").length,
+    secondaryStructureCount: environment.landmarks.filter(({ importance }) => importance === "secondary").length,
+    largestLandmarkFootprint: Math.max(0, ...environment.landmarks.map(({ rect }) => rect.width * rect.height)),
+    floorQuietnessRatio: quiet.length / floors.length,
+    highAttentionFloorRatio: attention.size / floors.length,
+    largestCalmRegion,
+  };
+}
+
 export function analyzeGeneratedMap(map: GameMap, contestedPoints: readonly Point[] = []): GeneratedMapMetrics {
   const walls = components(map, "wall");
   const isolatedWallCount = walls.filter((mass) => mass.length === 1).length;
@@ -367,6 +449,7 @@ export function analyzeGeneratedMap(map: GameMap, contestedPoints: readonly Poin
     corridorTileCount: corridorTileCount(map),
     mandatoryChokeCount: mandatoryChokeCount(map),
     contestedCoverPositions: contestedCoverPositions(map, contestedPoints),
+    ...environmentHierarchy(map),
   };
 }
 
@@ -374,8 +457,12 @@ function livingUnits(map: GameMap): Unit[] {
   return map.units.filter((unit) => unit.hp > 0);
 }
 
-export function validateGeneratedMap(map: GameMap, contestedPoints: readonly Point[] = []): TacticalQualityIssue[] {
-  const metrics = analyzeGeneratedMap(map, contestedPoints);
+export function validateGeneratedMap(
+  map: GameMap,
+  contestedPoints: readonly Point[] = [],
+  precomputedMetrics?: GeneratedMapMetrics,
+): TacticalQualityIssue[] {
+  const metrics = precomputedMetrics ?? analyzeGeneratedMap(map, contestedPoints);
   const issues: TacticalQualityIssue[] = [];
   const add = (code: string, message: string) => issues.push({ code, message });
   if (metrics.floorRegionCount !== 1) add("SEALED_FLOOR_REGION", `Expected one floor region; found ${metrics.floorRegionCount}.`);
@@ -399,14 +486,30 @@ export function validateGeneratedMap(map: GameMap, contestedPoints: readonly Poi
     if (getTile(map, unit.x, unit.y) !== "floor") add("ILLEGAL_SPAWN", `Unit '${unit.id}' is not on floor.`);
     if (passableNeighborCount(map, unit.x, unit.y) < 2) add("CRAMPED_SPAWN", `Unit '${unit.id}' has fewer than two local moves.`);
   }
-  if (metrics.themeId === "industrial" && metrics.longestWallRun < 8) {
-    add("WEAK_INDUSTRIAL_GRAMMAR", "Industrial layout lacks a recognizable long structural run.");
+  const kinds = new Set(map.environment?.landmarks.map(({ kind }) => kind) ?? []);
+  if (metrics.themeId === "industrial" && !kinds.has("furnace_block") && !kinds.has("coolant_tanks") && !kinds.has("processing_line")) {
+    add("WEAK_INDUSTRIAL_GRAMMAR", "Industrial layout lacks a major processing landmark.");
   }
-  if (metrics.themeId === "data_core" && metrics.wallJunctionCount < 12) {
-    add("WEAK_DATA_CORE_GRAMMAR", "Data Core layout lacks enough orthogonal wall junctions.");
+  if (metrics.themeId === "data_core" && !kinds.has("server_vault") && !kinds.has("data_core")) {
+    add("WEAK_DATA_CORE_GRAMMAR", "Data Core layout lacks a controlled core or vault landmark.");
   }
-  if (metrics.themeId === "derelict" && metrics.wallMassCount < 5) {
-    add("WEAK_DERELICT_GRAMMAR", "Derelict layout lacks distinct broken structural masses.");
+  if (metrics.themeId === "derelict" && !kinds.has("collapsed_room") && !kinds.has("scrap_heap")) {
+    add("WEAK_DERELICT_GRAMMAR", "Derelict layout lacks a damaged architectural landmark.");
+  }
+  if (metrics.landmarkCount < 2 || metrics.landmarkCount > 4) {
+    add("WEAK_FEATURE_HIERARCHY", `Expected 2–4 named landmarks; found ${metrics.landmarkCount}.`);
+  }
+  if (metrics.majorLandmarkCount < 1 || metrics.largestLandmarkFootprint < 30) {
+    add("MISSING_MAJOR_LANDMARK", "The map lacks a major landmark with a readable multi-tile footprint.");
+  }
+  if (metrics.floorQuietnessRatio < 0.5) {
+    add("FLOOR_TOO_BUSY", `Only ${Math.round(metrics.floorQuietnessRatio * 100)}% of floor remains untreated quiet space.`);
+  }
+  if (metrics.highAttentionFloorRatio > 0.1) {
+    add("EXCESSIVE_FLOOR_ACCENTS", `${Math.round(metrics.highAttentionFloorRatio * 100)}% of floor uses high-attention regional accents.`);
+  }
+  if (metrics.largestCalmRegion < 80) {
+    add("NO_CALM_REGION", `The largest connected quiet floor region contains only ${metrics.largestCalmRegion} tiles.`);
   }
   return issues;
 }

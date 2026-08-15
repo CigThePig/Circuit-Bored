@@ -19,7 +19,19 @@ export type MotifId =
   | "l_room"
   | "u_defense"
   | "salvage_cluster"
-  | "central_landmark";
+  | "central_landmark"
+  | "furnace_block"
+  | "processing_line"
+  | "coolant_tanks"
+  | "loading_bay"
+  | "server_vault"
+  | "data_core"
+  | "security_checkpoint"
+  | "server_rows"
+  | "collapsed_room"
+  | "scrap_heap"
+  | "wrecked_machinery"
+  | "breached_corridor";
 
 export function pointsInRect(rect: Rect): Point[] {
   const points: Point[] = [];

@@ -65,6 +65,13 @@ describe("procedural encounters", () => {
       );
       expect(openingShots).toBeLessThanOrEqual(2);
       const metrics = analyzeGeneratedMap(map);
+      expect(metrics.landmarkCount).toBeGreaterThanOrEqual(2);
+      expect(metrics.landmarkCount).toBeLessThanOrEqual(4);
+      expect(metrics.majorLandmarkCount).toBeGreaterThanOrEqual(1);
+      expect(metrics.largestLandmarkFootprint).toBeGreaterThanOrEqual(30);
+      expect(metrics.floorQuietnessRatio).toBeGreaterThanOrEqual(0.5);
+      expect(metrics.highAttentionFloorRatio).toBeLessThanOrEqual(0.1);
+      expect(metrics.largestCalmRegion).toBeGreaterThanOrEqual(80);
       seenThemes.add(metrics.themeId);
       const signatures = layoutsByTheme.get(metrics.themeId) ?? new Set<string>();
       signatures.add(map.tiles.join(""));
@@ -94,19 +101,21 @@ describe("procedural encounters", () => {
       themeId,
       generateEncounter(new SeededRng(`grammar-${themeId}`), 4, "elite", run.squad, [], { themeId }),
     ]));
-    const industrial = analyzeGeneratedMap(maps.industrial);
-    const dataCore = analyzeGeneratedMap(maps.data_core);
-    const derelict = analyzeGeneratedMap(maps.derelict);
-    expect(industrial.longestWallRun).toBeGreaterThanOrEqual(8);
-    expect(dataCore.wallJunctionCount).toBeGreaterThanOrEqual(12);
-    expect(derelict.wallMassCount).toBeGreaterThan(industrial.wallMassCount);
-    expect(new Set([industrial.wallMassCount, dataCore.wallMassCount, derelict.wallMassCount]).size).toBeGreaterThan(1);
+    const industrialKinds = new Set(maps.industrial.environment!.landmarks.map(({ kind }) => kind));
+    const dataKinds = new Set(maps.data_core.environment!.landmarks.map(({ kind }) => kind));
+    const derelictKinds = new Set(maps.derelict.environment!.landmarks.map(({ kind }) => kind));
+    expect([...industrialKinds].some((kind) => ["furnace_block", "coolant_tanks", "processing_line"].includes(kind))).toBe(true);
+    expect([...dataKinds].some((kind) => ["server_vault", "data_core"].includes(kind))).toBe(true);
+    expect([...derelictKinds].some((kind) => ["collapsed_room", "scrap_heap"].includes(kind))).toBe(true);
+    expect(new Set([...industrialKinds, ...dataKinds, ...derelictKinds]).size).toBeGreaterThanOrEqual(8);
     for (const map of Object.values(maps)) {
       const diagnostics = generatedEncounterDiagnostics(map)!;
       expect(diagnostics.motifs.length).toBeGreaterThanOrEqual(4);
       expect(diagnostics.zones.length).toBeGreaterThanOrEqual(3);
       expect(diagnostics.zones.length).toBeLessThanOrEqual(6);
       expect(diagnostics.metrics.floorRegionCount).toBe(1);
+      expect(diagnostics.landmarks).toHaveLength(map.environment!.landmarks.length);
+      expect(diagnostics.featureBudget).toEqual(map.environment!.featureBudget);
     }
   });
 

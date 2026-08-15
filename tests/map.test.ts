@@ -175,6 +175,30 @@ describe("sanitizeLoadedMap", () => {
     expect(result.report.issues.some((issue) => issue.code === "INVALID_THEME")).toBe(true);
     expect(result.report.hasErrors).toBe(false);
   });
+
+  it("sanitizes generated landmark metadata without breaking older maps", () => {
+    const raw = {
+      width: 6,
+      height: 6,
+      themeId: "data_core",
+      tiles: new Array(36).fill("floor"),
+      units: [validUnit("p", "player", 0, 0), validUnit("e", "enemy", 5, 5)],
+      environment: {
+        featureBudget: { major: 1, secondary: 1, minor: 2 },
+        landmarks: [
+          { id: "vault", name: "Server Vault", kind: "server_vault", importance: "major", rect: { x: 1, y: 1, width: 4, height: 4 } },
+          { id: "bad", name: "Outside", kind: "data_core", importance: "secondary", rect: { x: 5, y: 5, width: 2, height: 2 } },
+        ],
+        floorZones: [
+          { id: "vault-floor", treatment: "vault_grid", rect: { x: 1, y: 1, width: 4, height: 4 } },
+        ],
+      },
+    };
+    const result = sanitizeLoadedMap(raw);
+    expect(result.report.hasErrors).toBe(false);
+    expect(result.map?.environment?.landmarks.map(({ id }) => id)).toEqual(["vault"]);
+    expect(result.report.issues.some((issue) => issue.code === "INVALID_LANDMARK")).toBe(true);
+  });
   it("returns null on hard structural errors (bad tile length)", () => {
     const raw = {
       width: 4,
@@ -246,6 +270,20 @@ describe("cloneMap", () => {
     const source = createTestMap();
     source.themeId = "derelict";
     expect(cloneMap(source).themeId).toBe("derelict");
+  });
+
+  it("deep-clones generated environment metadata", () => {
+    const source = createTestMap();
+    source.environment = {
+      featureBudget: { major: 1, secondary: 1, minor: 2 },
+      landmarks: [{ id: "furnace", name: "Furnace Room", kind: "furnace_block", importance: "major", rect: { x: 1, y: 1, width: 4, height: 4 } }],
+      floorZones: [{ id: "bay", treatment: "machine_bay", rect: { x: 1, y: 1, width: 4, height: 4 } }],
+    };
+    const copy = cloneMap(source);
+    copy.environment!.landmarks[0].rect.x = 9;
+    copy.environment!.featureBudget.major = 4;
+    expect(source.environment.landmarks[0].rect.x).toBe(1);
+    expect(source.environment.featureBudget.major).toBe(1);
   });
 });
 
