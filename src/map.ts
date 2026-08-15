@@ -3,6 +3,10 @@ import {
   sanitizeLoadedMap,
   type ValidationReport,
 } from "./validation.ts";
+import {
+  DEFAULT_LEVEL_THEME_ID,
+  type LevelThemeId,
+} from "./themes.ts";
 
 export type TileType = "floor" | "wall" | "half_cover";
 
@@ -69,6 +73,8 @@ export type GameMap = {
   height: number;
   tiles: TileType[];
   units: Unit[];
+  /** Stable encounter identity. Older editor maps and saves default to the foundry. */
+  themeId?: LevelThemeId;
 };
 
 export const MAP_W = 16;
@@ -80,7 +86,7 @@ const STORAGE_KEY = "circuit-bored.map.v1";
 
 export function createEmptyMap(): GameMap {
   const tiles: TileType[] = new Array(MAP_W * MAP_H).fill("floor");
-  return { width: MAP_W, height: MAP_H, tiles, units: [] };
+  return { width: MAP_W, height: MAP_H, tiles, units: [], themeId: DEFAULT_LEVEL_THEME_ID };
 }
 
 export function idx(map: GameMap, x: number, y: number): number {
@@ -144,6 +150,7 @@ export function cloneMap(map: GameMap): GameMap {
     width: map.width,
     height: map.height,
     tiles: [...map.tiles],
+    themeId: map.themeId ?? DEFAULT_LEVEL_THEME_ID,
     units: map.units.map((u) => ({
       ...u,
       peekExposure: u.peekExposure ? { ...u.peekExposure } : null,

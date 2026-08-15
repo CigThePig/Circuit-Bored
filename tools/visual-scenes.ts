@@ -11,6 +11,7 @@ import {
   type ShotEffect,
 } from "../src/render.ts";
 import { SeededRng } from "../src/rng.ts";
+import { LEVEL_THEMES, type LevelThemeId } from "../src/themes.ts";
 
 export type VisualScene = {
   id: string;
@@ -266,9 +267,9 @@ function effectsScene(): VisualScene {
   };
 }
 
-function generatedScene(): VisualScene {
+export function buildGeneratedThemeScene(themeId: LevelThemeId, seed: string): VisualScene {
   const map = generateEncounter(
-    new SeededRng("VISUAL-LAB-CANONICAL"),
+    new SeededRng(seed),
     4,
     "elite",
     [
@@ -277,19 +278,28 @@ function generatedScene(): VisualScene {
       { id: "lab-hex", name: "Hex", archetypeId: "bulwark", hp: 11, maxHp: 11, baseMaxAp: 3 },
     ],
     ["smartlink", "ghost_step"],
+    { themeId },
   );
   const state = emptyState(map);
   state.selected = map.units.find((unit) => unit.team === "player") ?? null;
 
   return {
-    id: "encounter",
-    title: "Canonical generated encounter",
-    description: "A stable seeded elite map that catches interactions hidden by isolated contact sheets.",
-    review: "Terrain hierarchy should survive a realistic composition without units or HUD markers disappearing into it.",
+    id: `generated-${themeId.replace("_", "-")}`,
+    title: `${LEVEL_THEMES[themeId].shortName} generated encounter`,
+    description: `Real generator and renderer output for fixed seed ${seed}. ${LEVEL_THEMES[themeId].tacticalCharacter}`,
+    review: "Read the environment from geometry in grayscale, then confirm themed floor, wall, and cover art remains subordinate to units.",
     state,
   };
 }
 
 export function buildVisualScenes(): VisualScene[] {
-  return [terrainScene(), unitScene(), overlayScene(), effectsScene(), generatedScene()];
+  return [
+    terrainScene(),
+    unitScene(),
+    overlayScene(),
+    effectsScene(),
+    buildGeneratedThemeScene("industrial", "FOUNDRY-LANES-41"),
+    buildGeneratedThemeScene("data_core", "DATA-CORE-ROOMS-17"),
+    buildGeneratedThemeScene("derelict", "SALVAGE-BREACH-29"),
+  ];
 }

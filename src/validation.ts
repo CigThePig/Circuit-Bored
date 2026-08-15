@@ -1,5 +1,6 @@
 import type { GameMap, TileType, Unit } from "./map.ts";
 import { UNIT_AP, UNIT_HP, generateUnitId } from "./map.ts";
+import { DEFAULT_LEVEL_THEME_ID, isLevelThemeId } from "./themes.ts";
 
 export type ValidationSeverity = "error" | "warning" | "notice" | "info";
 
@@ -54,6 +55,10 @@ function pushWarning(
 
 export function validateMap(map: GameMap): ValidationReport {
   const issues: ValidationIssue[] = [];
+
+  if (map.themeId !== undefined && !isLevelThemeId(map.themeId)) {
+    pushError(issues, "INVALID_THEME", `Map theme '${String(map.themeId)}' is not supported.`);
+  }
 
   if (!isFiniteNonNegativeInt(map.width) || map.width <= 0) {
     pushError(issues, "INVALID_WIDTH", `Map width must be a positive integer (got ${String(map.width)}).`);
@@ -421,7 +426,11 @@ export function sanitizeLoadedMap(raw: unknown): {
     });
   }
 
-  const cleaned: GameMap = { width, height, tiles, units: cleanedUnits };
+  const themeId = isLevelThemeId(raw.themeId) ? raw.themeId : DEFAULT_LEVEL_THEME_ID;
+  if (raw.themeId !== undefined && !isLevelThemeId(raw.themeId)) {
+    pushWarning(issues, "INVALID_THEME", `Replaced unknown map theme '${String(raw.themeId)}' with '${themeId}'.`);
+  }
+  const cleaned: GameMap = { width, height, tiles, units: cleanedUnits, themeId };
 
   const report = validateMap(cleaned);
   return {

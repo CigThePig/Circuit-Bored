@@ -38,8 +38,15 @@ Lower levels must never obscure higher levels.
 ## Review sizes
 
 - 28 px: minimum-detail/mobile stress case.
-- 40 px: normal 12×12 encounter presentation.
+- 40 px: normal detail review for encounters; generated 24×24 maps scroll in the lab rather than shrinking below readability.
 - 56 px: detail and shape inspection.
 
 Review the terrain contact sheet, unit lineup, overlay matrix, and generated
 encounter at all three sizes before approving a renderer change.
+
+## Environment families
+
+- Industrial Processing Foundry uses long wall runs, broad lanes, pipe-bank machinery, and functional cargo clusters.
+- Data Core Security Complex uses clean orthogonal panels, room partitions, controlled entrances, consoles, and checkpoint cover.
+- Derelict Maintenance Salvage Deck uses worn plates, broken wall masses, exposed conduits, salvage piles, and improvised barricades.
+- Geometry must identify the family before colour does. Theme palettes may reinforce identity, but floor remains the quietest value, half cover a compact raised object, and walls the strongest connected mass in every family.

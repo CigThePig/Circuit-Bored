@@ -167,7 +167,8 @@
         position: relative;
         width: 100%;
         isolation: isolate;
-        overflow: hidden;
+        overflow: auto;
+        overscroll-behavior: contain;
         background: #060a0f;
       }
       #canvas-wrap::after {
@@ -193,7 +194,7 @@
         background: var(--bg-base);
         box-shadow: 0 0 0 1px var(--line), inset 0 0 24px rgba(0, 0, 0, 0.6);
         filter: saturate(1.08) contrast(1.035);
-        touch-action: none;
+        touch-action: pan-x pan-y;
       }
       #hud {
         padding: 10px;
