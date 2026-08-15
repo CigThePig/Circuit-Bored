@@ -44,14 +44,10 @@ export function hasLineOfSight(
   bx: number,
   by: number,
 ): boolean {
-  if (ax === bx && ay === by) return true;
-  const line = bresenhamLine(ax, ay, bx, by);
-  for (let i = 1; i < line.length - 1; i++) {
-    const p = line[i];
-    if (!inBounds(map, p.x, p.y)) return false;
-    if (getTile(map, p.x, p.y) === "wall") return false;
-  }
-  return true;
+  // Preserve the legacy API without preserving its permissive corner rules.
+  // Every current and future caller now receives the same conservative
+  // supercover geometry used by previews, AI, overwatch, and resolution.
+  return hasStrictLineOfSight(map, ax, ay, bx, by);
 }
 
 type StrictLineStep = {
@@ -295,6 +291,7 @@ export type ShotLineResult = {
   mode: ShotLineMode;
   from: { x: number; y: number };
   peekFrom?: { x: number; y: number };
+  peekShoulder?: { x: number; y: number };
   blockingTiles?: { x: number; y: number }[];
   targetExposure?: boolean;
 };
@@ -311,6 +308,25 @@ function isPeekTileShootable(
   const occupant = unitAt(map, px, py);
   if (occupant && occupant.id !== shooter.id) return false;
   return true;
+}
+
+function validCommittedExposure(
+  map: GameMap,
+  target: Unit,
+): { x: number; y: number } | null {
+  const exposure = target.peekExposure;
+  if (!exposure) return null;
+  const dx = exposure.x - target.x;
+  const dy = exposure.y - target.y;
+  if (Math.abs(dx) !== 1 || Math.abs(dy) !== 1) return null;
+  if (!inBounds(map, exposure.x, exposure.y)) return null;
+  if (getTile(map, exposure.x, exposure.y) !== "floor") return null;
+  const occupant = unitAt(map, exposure.x, exposure.y);
+  if (occupant && occupant.id !== target.id) return null;
+  const legalPeeks = getPeekPositionsToward(map, target.x, target.y, null, null);
+  return legalPeeks.some((peek) => peek.x === exposure.x && peek.y === exposure.y)
+    ? { ...exposure }
+    : null;
 }
 
 /**
@@ -335,6 +351,22 @@ export function canShootTarget(
   const tx = target.x;
   const ty = target.y;
 
+  // Units and committed silhouettes must never turn impassable geometry into
+  // a valid endpoint, even if a malformed/stale save places them there.
+  if (
+    !inBounds(map, sx, sy) ||
+    !inBounds(map, tx, ty) ||
+    getTile(map, sx, sy) !== "floor" ||
+    getTile(map, tx, ty) !== "floor"
+  ) {
+    return {
+      canShoot: false,
+      mode: "blocked",
+      from: { x: sx, y: sy },
+      blockingTiles: [],
+    };
+  }
+
   if (hasStrictLineOfSight(map, sx, sy, tx, ty)) {
     return { canShoot: true, mode: "direct", from: { x: sx, y: sy } };
   }
@@ -347,10 +379,11 @@ export function canShootTarget(
       mode: "peek",
       from: { x: peek.x, y: peek.y },
       peekFrom: { x: peek.x, y: peek.y },
+      peekShoulder: { x: sx + peek.sideDx, y: sy + peek.sideDy },
     };
   }
 
-  const exposure = target.peekExposure;
+  const exposure = validCommittedExposure(map, target);
   if (exposure) {
     const ex = exposure.x;
     const ey = exposure.y;
@@ -370,6 +403,7 @@ export function canShootTarget(
         mode: "peek",
         from: { x: peek.x, y: peek.y },
         peekFrom: { x: peek.x, y: peek.y },
+        peekShoulder: { x: sx + peek.sideDx, y: sy + peek.sideDy },
         targetExposure: true,
       };
     }
@@ -588,6 +622,7 @@ export function previewShot(
 }
 
 export type ShotResult = {
+  canShoot: boolean;
   hit: boolean;
   damage: number;
   hitChance: number;
@@ -595,6 +630,7 @@ export type ShotResult = {
   mode: Exclude<ShotLineMode, "blocked">;
   from: { x: number; y: number };
   targetPoint: { x: number; y: number };
+  peekShoulder?: { x: number; y: number };
 };
 
 export function resolveShot(
@@ -605,8 +641,8 @@ export function resolveShot(
 ): ShotResult {
   const preview = previewShot(map, shooter, target);
   const { shot, hitChance, hadCover } = preview;
-  const roll = rng();
-  const hit = roll < hitChance;
+  const roll = shot.canShoot ? rng() : 1;
+  const hit = shot.canShoot && roll < hitChance;
   const rawDamage = SHOT_DAMAGE + (shooter.combat?.damageBonus ?? 0) +
     (shooter.resolvingOverwatch ? shooter.combat?.overwatchDamageBonus ?? 0 : 0);
   const damage = hit
@@ -646,6 +682,7 @@ export function resolveShot(
     shooter.peekExposure = { x: shooter.x + ddx, y: shooter.y + ddy };
   }
   return {
+    canShoot: shot.canShoot,
     hit,
     damage,
     hitChance,
@@ -653,5 +690,6 @@ export function resolveShot(
     mode: shot.mode === "peek" ? "peek" : "direct",
     from: { ...shot.from },
     targetPoint: { ...preview.targetPoint },
+    peekShoulder: shot.peekShoulder ? { ...shot.peekShoulder } : undefined,
   };
 }

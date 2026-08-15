@@ -213,6 +213,8 @@ export function startRuntime(
           state.sightLines!.push({
             fromX: preview.shot.from.x,
             fromY: preview.shot.from.y,
+            peekShoulderX: preview.shot.peekShoulder?.x,
+            peekShoulderY: preview.shot.peekShoulder?.y,
             toX: preview.targetPoint.x,
             toY: preview.targetPoint.y,
             hasCover: preview.hadCover,
@@ -341,7 +343,8 @@ export function startRuntime(
     });
   };
 
-  const addShotEffect = (shooter: Unit, target: Unit, result: ShotResult): ShotEffect => {
+  const addShotEffect = (shooter: Unit, target: Unit, result: ShotResult): ShotEffect | null => {
+    if (!result.canShoot) return null;
     const effect: ShotEffect = {
       id: `shot-${shotEffectSequence++}`,
       shooterId: shooter.id,
@@ -354,6 +357,8 @@ export function startRuntime(
       targetY: target.y,
       fromX: result.from.x,
       fromY: result.from.y,
+      peekShoulderX: result.peekShoulder?.x,
+      peekShoulderY: result.peekShoulder?.y,
       toX: result.targetPoint.x,
       toY: result.targetPoint.y,
       mode: result.mode,
@@ -420,6 +425,11 @@ export function startRuntime(
       selected.ap -= 2;
       const result = resolveShot(map, selected, tappedUnit, random);
       const effect = addShotEffect(selected, tappedUnit, result);
+      if (!effect) {
+        selected.ap += 2;
+        redraw();
+        return;
+      }
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, tappedUnit.x, tappedUnit.y, "#ffd83a");
       } else {
@@ -480,6 +490,7 @@ export function startRuntime(
       const result = resolveShot(map, p, enemy, random);
       const effect = addShotEffect(p, enemy, result);
       p.resolvingOverwatch = false;
+      if (!effect) continue;
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, enemy.x, enemy.y, "#ffd83a");
       } else {
@@ -509,6 +520,7 @@ export function startRuntime(
       const result = resolveShot(map, enemy, player, random);
       const effect = addShotEffect(enemy, player, result);
       enemy.resolvingOverwatch = false;
+      if (!effect) continue;
       enemy.overwatch = false;
       addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
       redraw();
@@ -536,6 +548,7 @@ export function startRuntime(
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
           const effect = addShotEffect(enemy, action.target, action.result);
+          if (!effect) break;
           if (action.result.hit) {
             addFloating(`HIT ${action.result.damage}`, action.target.x, action.target.y, "#ffd83a");
           } else {

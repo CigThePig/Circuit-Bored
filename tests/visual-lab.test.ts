@@ -41,6 +41,8 @@ describe("visual laboratory", () => {
       expect(preview.shot.canShoot).toBe(true);
       expect(preview.shot.mode).toBe(effect.mode);
       expect(preview.shot.from).toEqual({ x: effect.fromX, y: effect.fromY });
+      expect(preview.shot.peekShoulder?.x).toBe(effect.peekShoulderX);
+      expect(preview.shot.peekShoulder?.y).toBe(effect.peekShoulderY);
       expect(preview.targetPoint).toEqual({ x: effect.toX, y: effect.toY });
     }
 

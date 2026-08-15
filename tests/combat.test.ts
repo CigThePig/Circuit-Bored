@@ -5,6 +5,7 @@ import {
   HALF_COVER_PENALTY,
   PEEK_PENALTY,
   canShootTarget,
+  hasLineOfSight,
   hasStrictLineOfSight,
   previewShot,
   resolveShot,
@@ -56,6 +57,7 @@ describe("hasStrictLineOfSight", () => {
       "..",
     ]);
     expect(hasStrictLineOfSight(map, 0, 0, 1, 1)).toBe(false);
+    expect(hasLineOfSight(map, 0, 0, 1, 1)).toBe(false);
   });
 
   it("blocks a diagonal when both corner walls are present", () => {
@@ -138,6 +140,66 @@ describe("canShootTarget", () => {
     const result = canShootTarget(map, shooter, target);
     expect(result.canShoot).toBe(false);
     expect(result.mode).toBe("blocked");
+  });
+
+  it("blocks shots through the middle of a connected wall", () => {
+    const map = buildMap([
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+    ], [
+      { team: "enemy", x: 2, y: 2 },
+      { team: "player", x: 5, y: 2 },
+    ]);
+    const [shooter, target] = map.units;
+    expect(hasStrictLineOfSight(map, shooter.x, shooter.y, target.x, target.y)).toBe(false);
+    expect(canShootTarget(map, shooter, target)).toMatchObject({
+      canShoot: false,
+      mode: "blocked",
+    });
+  });
+
+  it("allows a peek only around the actual end of a connected wall", () => {
+    const map = buildMap([
+      "...#...",
+      "...#...",
+      "...#...",
+      ".......",
+      ".......",
+    ], [
+      { team: "enemy", x: 2, y: 2 },
+      { team: "player", x: 5, y: 4 },
+    ]);
+    const [shooter, target] = map.units;
+    const shot = canShootTarget(map, shooter, target);
+    expect(shot).toMatchObject({
+      canShoot: true,
+      mode: "peek",
+      from: { x: 3, y: 3 },
+      peekShoulder: { x: 2, y: 3 },
+    });
+    expect(hasStrictLineOfSight(map, shot.from.x, shot.from.y, target.x, target.y)).toBe(true);
+  });
+
+  it("ignores stale exposure metadata that would bypass a wall", () => {
+    const map = buildMap([
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+    ], [
+      { team: "player", x: 2, y: 2 },
+      { team: "enemy", x: 5, y: 2 },
+    ]);
+    const [target, shooter] = map.units;
+    target.peekExposure = { x: 4, y: 2 };
+    expect(canShootTarget(map, shooter, target)).toMatchObject({
+      canShoot: false,
+      mode: "blocked",
+    });
   });
 
   it("rejects a peek tile occupied by another living unit", () => {
@@ -312,6 +374,7 @@ describe("resolveShot", () => {
     ]);
     const [shooter, target] = map.units;
     const result = resolveShot(map, shooter, target, () => 0);
+    expect(result.canShoot).toBe(false);
     expect(result.hitChance).toBe(0);
     expect(result.hit).toBe(false);
     expect(result.damage).toBe(0);

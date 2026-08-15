@@ -158,6 +158,8 @@ function overlayScene(): VisualScene {
         {
           fromX: 2,
           fromY: 2,
+          peekShoulderX: 2,
+          peekShoulderY: 3,
           toX: clear.x,
           toY: clear.y,
           hasCover: false,
@@ -227,6 +229,8 @@ function effectsScene(): VisualScene {
       targetY: target.y,
       fromX: preview.shot.from.x,
       fromY: preview.shot.from.y,
+      peekShoulderX: preview.shot.peekShoulder?.x,
+      peekShoulderY: preview.shot.peekShoulder?.y,
       toX: preview.targetPoint.x,
       toY: preview.targetPoint.y,
       mode: preview.shot.mode,

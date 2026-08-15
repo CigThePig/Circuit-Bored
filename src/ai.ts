@@ -310,6 +310,12 @@ export function takeEnemyAction(
       }
       enemy.ap -= SHOOT_AP_COST;
       const result = resolveShot(map, enemy, best, rng);
+      if (!result.canShoot) {
+        // Geometry changed between target selection and resolution. Refuse to
+        // emit a shot through blocked terrain and restore the spent AP.
+        enemy.ap += SHOOT_AP_COST;
+        return { kind: "wait" };
+      }
       return { kind: "shoot", target: best, result };
     }
   }
