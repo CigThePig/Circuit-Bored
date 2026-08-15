@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  environmentProfile,
+  landmarkAmbient,
+  landmarkOrientation,
+} from "../src/environment.ts";
+import {
   canRunMap,
   sanitizeLoadedMap,
   validateMap,
@@ -198,6 +203,82 @@ describe("sanitizeLoadedMap", () => {
     expect(result.report.hasErrors).toBe(false);
     expect(result.map?.environment?.landmarks.map(({ id }) => id)).toEqual(["vault"]);
     expect(result.report.issues.some((issue) => issue.code === "INVALID_LANDMARK")).toBe(true);
+    // Pre-landmark-art saves omit identity fields entirely and must survive.
+    const legacy = result.map!.environment!.landmarks[0];
+    expect(legacy.orientation).toBeUndefined();
+    expect(legacy.ambient).toBeUndefined();
+    expect(landmarkOrientation(legacy)).toBe("s");
+    expect(landmarkAmbient(legacy)).toBe("none");
+    expect(environmentProfile(result.map!.environment)).toBe("quiet");
+  });
+
+  it("keeps landmark identity, zone roles, and the composition profile when they are valid", () => {
+    const raw = {
+      width: 8,
+      height: 8,
+      themeId: "industrial",
+      tiles: new Array(64).fill("floor"),
+      units: [validUnit("p", "player", 0, 0), validUnit("e", "enemy", 7, 7)],
+      environment: {
+        featureBudget: { major: 1, secondary: 1, minor: 2 },
+        profile: "heavy",
+        landmarks: [{
+          id: "furnace",
+          name: "Furnace Hall",
+          kind: "furnace_block",
+          importance: "dominant",
+          rect: { x: 1, y: 1, width: 5, height: 5 },
+          orientation: "e",
+          variant: 2,
+          ambient: "furnace_pulse",
+        }],
+        floorZones: [
+          { id: "furnace-apron", treatment: "machine_bay", rect: { x: 0, y: 0, width: 7, height: 7 }, role: "machine_service", ownerId: "furnace" },
+          { id: "orphan", treatment: "machine_bay", rect: { x: 0, y: 0, width: 2, height: 2 }, role: "salvage_work", ownerId: "missing-feature" },
+        ],
+      },
+    };
+    const result = sanitizeLoadedMap(raw);
+    expect(result.report.hasErrors).toBe(false);
+    const environment = result.map!.environment!;
+    expect(environment.profile).toBe("heavy");
+    expect(environment.landmarks[0]).toMatchObject({ orientation: "e", variant: 2, ambient: "furnace_pulse", importance: "dominant" });
+    expect(environment.floorZones[0]).toMatchObject({ role: "machine_service", ownerId: "furnace" });
+    // A zone may not claim a landmark that did not survive sanitization.
+    expect(environment.floorZones[1].ownerId).toBeUndefined();
+    expect(environment.floorZones[1].role).toBe("salvage_work");
+  });
+
+  it("drops unusable landmark identity fields instead of rejecting the map", () => {
+    const raw = {
+      width: 8,
+      height: 8,
+      tiles: new Array(64).fill("floor"),
+      units: [validUnit("p", "player", 0, 0), validUnit("e", "enemy", 7, 7)],
+      environment: {
+        featureBudget: { major: 1, secondary: 0, minor: 0 },
+        profile: "chaotic",
+        landmarks: [{
+          id: "core",
+          name: "Processing Core",
+          kind: "data_core",
+          importance: "major",
+          rect: { x: 1, y: 1, width: 4, height: 4 },
+          orientation: "up",
+          variant: 99,
+          ambient: "disco",
+        }],
+        floorZones: [{ id: "z", treatment: "vault_grid", rect: { x: 1, y: 1, width: 4, height: 4 }, role: "nowhere" }],
+      },
+    };
+    const result = sanitizeLoadedMap(raw);
+    expect(result.report.hasErrors).toBe(false);
+    const environment = result.map!.environment!;
+    expect(environment.profile).toBeUndefined();
+    expect(environment.landmarks[0].orientation).toBeUndefined();
+    expect(environment.landmarks[0].variant).toBeUndefined();
+    expect(environment.landmarks[0].ambient).toBeUndefined();
+    expect(environment.floorZones[0].role).toBeUndefined();
   });
   it("returns null on hard structural errors (bad tile length)", () => {
     const raw = {
@@ -276,14 +357,31 @@ describe("cloneMap", () => {
     const source = createTestMap();
     source.environment = {
       featureBudget: { major: 1, secondary: 1, minor: 2 },
-      landmarks: [{ id: "furnace", name: "Furnace Room", kind: "furnace_block", importance: "major", rect: { x: 1, y: 1, width: 4, height: 4 } }],
-      floorZones: [{ id: "bay", treatment: "machine_bay", rect: { x: 1, y: 1, width: 4, height: 4 } }],
+      profile: "heavy",
+      landmarks: [{
+        id: "furnace",
+        name: "Furnace Hall",
+        kind: "furnace_block",
+        importance: "dominant",
+        rect: { x: 1, y: 1, width: 4, height: 4 },
+        orientation: "e",
+        variant: 1,
+        ambient: "furnace_pulse",
+      }],
+      floorZones: [{ id: "bay", treatment: "machine_bay", rect: { x: 1, y: 1, width: 4, height: 4 }, role: "machine_service", ownerId: "furnace" }],
     };
     const copy = cloneMap(source);
+    expect(copy.environment).toEqual(source.environment);
     copy.environment!.landmarks[0].rect.x = 9;
+    copy.environment!.landmarks[0].orientation = "w";
+    copy.environment!.floorZones[0].rect.y = 7;
     copy.environment!.featureBudget.major = 4;
+    copy.environment!.profile = "quiet";
     expect(source.environment.landmarks[0].rect.x).toBe(1);
+    expect(source.environment.landmarks[0].orientation).toBe("e");
+    expect(source.environment.floorZones[0].rect.y).toBe(1);
     expect(source.environment.featureBudget.major).toBe(1);
+    expect(source.environment.profile).toBe("heavy");
   });
 });
 

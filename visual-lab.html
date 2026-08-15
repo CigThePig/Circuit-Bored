@@ -84,6 +84,17 @@
       .scene h2 { margin: 4px 0; font-size: 18px; }
       .scene p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
       .review { margin-top: 6px !important; color: #c6d8df !important; }
+      .scene-facts {
+        display: grid;
+        grid-template-columns: minmax(110px, auto) 1fr;
+        gap: 3px 12px;
+        margin: 10px 0 0;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        background: rgba(6,12,18,.6);
+      }
+      .scene-facts dt { color: var(--cyan); font: 700 10px ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
+      .scene-facts dd { margin: 0; color: var(--muted); font: 400 11px ui-monospace, monospace; line-height: 1.45; }
       .canvas-stage {
         overflow: auto;
         padding: 18px;
@@ -156,12 +167,20 @@
         </div>
         <label class="toggle"><input id="show-overlays" type="checkbox" checked /> Show overlays</label>
         <label class="toggle"><input id="animate" type="checkbox" /> Animate units</label>
+        <label class="toggle"><input id="ambient" type="checkbox" checked /> Ambient landmarks</label>
         <div class="control">
           <label for="inspection-theme">Inspect theme</label>
           <select id="inspection-theme">
             <option value="industrial">Foundry</option>
             <option value="data_core">Data Core</option>
             <option value="derelict">Salvage Deck</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="inspection-profile">Inspect profile</label>
+          <select id="inspection-profile">
+            <option value="landmark">Heavy</option>
+            <option value="quiet">Quiet</option>
           </select>
         </div>
         <div class="control">
@@ -182,11 +201,15 @@
         <article><strong>Minimum size</strong><span>Gameplay meaning survives at 28 px even when decoration drops out.</span></article>
         <article><strong>Overlay priority</strong><span>Targets, threat, HP, AP, and cover never compete for the same space.</span></article>
         <article><strong>Real composition</strong><span>The generated encounter remains readable, not merely the isolated samples.</span></article>
+        <article><strong>Named nouns</strong><span>Every board should be describable as a furnace hall, a vault, or a wrecked bay.</span></article>
+        <article><strong>One anchor</strong><span>A dominant feature wins the eye; supporting structures never compete with it.</span></article>
+        <article><strong>Quiet stays quiet</strong><span>Ambient motion belongs to landmarks only; ordinary floor never moves.</span></article>
+        <article><strong>Heavy vs quiet</strong><span>Heavy adds environmental context, not density; quiet stays evocative, not empty.</span></article>
       </section>
 
       <div id="status" class="status" role="status" aria-live="polite"></div>
       <footer>
-        Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size, seed inspection, and diagnostic settings.
+        Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size, seed inspection, and diagnostic settings.
       </footer>
     </div>
     <script type="module" src="/tools/visual-lab.ts"></script>

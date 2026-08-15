@@ -24,6 +24,12 @@ Wall tiles must read as impassable before their internal decoration is read.
 Do not rely on colour alone for gameplay meaning. Preserve the hierarchy in
 `docs/ART_DIRECTION.md`.
 
+Bespoke landmark artwork lives in `src/renderLandmarks.ts` and is reviewed
+through the three landmark gallery scenes. When adding a landmark family, add
+it to `LANDMARK_KINDS`, give it a painter in `generationLandmarks.ts`, an art
+entry in `renderLandmarks.ts`, and a slot in the matching gallery; the visual
+lab test fails if any kind lacks artwork or a gallery example.
+
 ## Validation
 
 Run focused visual checks while iterating:
@@ -46,7 +52,12 @@ does not link to it. Keep production gameplay in `index.html` and `src/`.
 
 - Prefer deterministic canvas art for board elements that react to game state.
 - Keep visual-only metadata out of saves unless variation truly needs state.
-- Add a canonical lab example for every new unit, terrain family, or overlay.
+- Add a canonical lab example for every new unit, terrain family, overlay, or
+  landmark family.
+- Landmark artwork may only draw on wall tiles inside its own footprint. Never
+  paint gameplay-bearing information into environmental art.
+- Ambient motion belongs to landmarks only and must stay a pure function of the
+  frame timestamp.
 - Never make the lab's hand-authored overlays a source of gameplay truth.
 - Keep mobile readability at a 28 px cell size; decorative detail may disappear,
   but walls, cover, units, targets, HP, and AP must remain recognizable.

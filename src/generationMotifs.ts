@@ -1,9 +1,11 @@
+import type { LandmarkKind } from "./environment.ts";
 import { getTile, inBounds, setTile, type GameMap, type TileType } from "./map.ts";
 
 export type Point = { x: number; y: number };
 export type Rect = { x: number; y: number; width: number; height: number };
 
-export type MotifId =
+/** Shape-language building blocks shared by every theme. */
+export type StructuralMotifId =
   | "wall_with_breaches"
   | "machinery_island"
   | "paired_machinery"
@@ -20,18 +22,18 @@ export type MotifId =
   | "u_defense"
   | "salvage_cluster"
   | "central_landmark"
-  | "furnace_block"
-  | "processing_line"
-  | "coolant_tanks"
-  | "loading_bay"
-  | "server_vault"
-  | "data_core"
-  | "security_checkpoint"
-  | "server_rows"
-  | "collapsed_room"
-  | "scrap_heap"
-  | "wrecked_machinery"
-  | "breached_corridor";
+  // Theme shape-language motifs introduced with the bespoke landmark pass.
+  | "industrial_spine"
+  | "equipment_mass"
+  | "service_gantry"
+  | "mirrored_compartments"
+  | "controlled_perimeter"
+  | "repeated_rhythm"
+  | "broken_outline"
+  | "offset_remnant"
+  | "rubble_field";
+
+export type MotifId = StructuralMotifId | LandmarkKind;
 
 export function pointsInRect(rect: Rect): Point[] {
   const points: Point[] = [];
@@ -176,5 +178,185 @@ export function paintUDefense(map: GameMap, anchor: Point, width: number, height
   const coverY = openSide === "n" ? anchor.y + 1 : anchor.y + height - 2;
   for (let x = anchor.x + 1; x < anchor.x + width - 1; x += 2) {
     if (getTile(map, x, coverY) === "floor") setTile(map, x, coverY, "half_cover");
+  }
+}
+
+/**
+ * Foundry shape language: a heavy asymmetric equipment mass. A notch and a
+ * stepped shoulder keep the silhouette from reading as a plain rectangle even
+ * in Squint mode, while the bulk stays a single connected wall structure.
+ */
+export function paintChunkyMass(map: GameMap, rect: Rect, notchSide: "n" | "e" | "s" | "w", phase = 0): void {
+  paintRect(map, rect, "wall");
+  const notchDepth = Math.max(1, Math.floor(Math.min(rect.width, rect.height) / 3));
+  const notchSpan = Math.max(2, Math.floor(Math.max(rect.width, rect.height) / 3));
+  const offset = phase % 2 === 0 ? 1 : Math.max(1, rect.width - notchSpan - 1);
+  if (notchSide === "n" || notchSide === "s") {
+    const startY = notchSide === "n" ? rect.y : rect.y + rect.height - notchDepth;
+    paintRect(map, { x: rect.x + offset, y: startY, width: Math.min(notchSpan, rect.width - offset), height: notchDepth }, "floor");
+  } else {
+    const startX = notchSide === "w" ? rect.x : rect.x + rect.width - notchDepth;
+    const yOffset = phase % 2 === 0 ? 1 : Math.max(1, rect.height - notchSpan - 1);
+    paintRect(map, { x: startX, y: rect.y + yOffset, width: notchDepth, height: Math.min(notchSpan, rect.height - yOffset) }, "floor");
+  }
+}
+
+/**
+ * Foundry shape language: parallel processing runs. Long, aligned, breached
+ * wall lines that read as machinery rows rather than as room partitions.
+ */
+export function paintParallelRuns(
+  map: GameMap,
+  rect: Rect,
+  runs: number,
+  horizontal: boolean,
+  phase = 0,
+): void {
+  const span = horizontal ? rect.height : rect.width;
+  const length = horizontal ? rect.width : rect.height;
+  const step = Math.max(2, Math.floor(span / Math.max(1, runs)));
+  for (let index = 0; index < runs; index++) {
+    const offset = index * step;
+    if (offset >= span) break;
+    const breachA = 2 + ((index + phase) % 3);
+    const breachB = Math.max(breachA + 3, length - 4 - ((index + phase) % 3));
+    const start = horizontal ? { x: rect.x, y: rect.y + offset } : { x: rect.x + offset, y: rect.y };
+    paintWallRun(map, start, length, horizontal, [breachA, breachB], 2);
+  }
+}
+
+/**
+ * Data Core shape language: a precise compartment with deliberate openings on
+ * named sides. Doors are always two tiles wide and centred so the room reads
+ * as engineered rather than eroded.
+ */
+export function paintCompartment(
+  map: GameMap,
+  rect: Rect,
+  openSides: readonly ("n" | "e" | "s" | "w")[],
+): void {
+  const doors: Point[] = [];
+  const midX = rect.x + Math.floor((rect.width - 1) / 2);
+  const midY = rect.y + Math.floor((rect.height - 1) / 2);
+  for (const side of openSides) {
+    if (side === "n") doors.push({ x: midX, y: rect.y }, { x: midX + 1, y: rect.y });
+    if (side === "s") doors.push({ x: midX, y: rect.y + rect.height - 1 }, { x: midX + 1, y: rect.y + rect.height - 1 });
+    if (side === "w") doors.push({ x: rect.x, y: midY }, { x: rect.x, y: midY + 1 });
+    if (side === "e") doors.push({ x: rect.x + rect.width - 1, y: midY }, { x: rect.x + rect.width - 1, y: midY + 1 });
+  }
+  paintRoomBoundary(map, rect, doors);
+}
+
+/**
+ * Data Core shape language: repeated equipment rhythm. Evenly spaced stubs of
+ * identical length read as a designed, rack-filled hall.
+ */
+export function paintRhythmRow(
+  map: GameMap,
+  rect: Rect,
+  horizontal: boolean,
+  spacing: number,
+  length: number,
+): void {
+  const span = horizontal ? rect.width : rect.height;
+  for (let offset = 0; offset < span; offset += spacing) {
+    const start = horizontal ? { x: rect.x + offset, y: rect.y } : { x: rect.x, y: rect.y + offset };
+    paintWallRun(map, start, length, !horizontal);
+  }
+}
+
+/**
+ * Derelict shape language: a structural outline that never closes. Segments
+ * drop out on an irregular cadence so the remnant looks damaged instead of
+ * merely doored.
+ */
+export function paintBrokenOutline(map: GameMap, rect: Rect, phase = 0): void {
+  const perimeter: Point[] = [];
+  for (let x = rect.x; x < rect.x + rect.width; x++) {
+    perimeter.push({ x, y: rect.y });
+  }
+  for (let y = rect.y + 1; y < rect.y + rect.height; y++) {
+    perimeter.push({ x: rect.x + rect.width - 1, y });
+  }
+  for (let x = rect.x + rect.width - 2; x >= rect.x; x--) {
+    perimeter.push({ x, y: rect.y + rect.height - 1 });
+  }
+  for (let y = rect.y + rect.height - 2; y > rect.y; y--) {
+    perimeter.push({ x: rect.x, y });
+  }
+  for (const [index, point] of perimeter.entries()) {
+    const cadence = (index * 5 + phase * 3) % 17;
+    if (cadence < 4 || cadence === 9) continue;
+    setTile(map, point.x, point.y, "wall");
+  }
+}
+
+/**
+ * Derelict shape language: offset remnant masses. Two or three blocks slip out
+ * of alignment with each other, which is the clearest grayscale signal that a
+ * structure failed rather than that it was laid out.
+ */
+export function paintOffsetRemnant(map: GameMap, rect: Rect, phase = 0): void {
+  const slabW = Math.max(2, Math.floor(rect.width / 2));
+  const slabH = Math.max(2, Math.floor(rect.height / 2));
+  const slip = 1 + (phase % 2);
+  paintRect(map, { x: rect.x, y: rect.y, width: slabW, height: slabH }, "wall");
+  paintRect(map, {
+    x: Math.min(rect.x + slabW - 1 + slip, rect.x + rect.width - 2),
+    y: rect.y + Math.max(1, slabH - slip),
+    width: Math.max(2, rect.width - slabW - slip),
+    height: Math.max(2, rect.height - slabH),
+  }, "wall");
+}
+
+/**
+ * Derelict shape language: debris that clusters around a damaged mass. Rubble
+ * always touches existing structure, and the count is capped so a wreck reads
+ * as a damaged place rather than as a field of scattered tactical props.
+ */
+export function paintRubbleField(map: GameMap, rect: Rect, phase = 0, density = 5, limit = 4): void {
+  let placed = 0;
+  for (const point of pointsInRect(rect)) {
+    if (placed >= limit) return;
+    if (getTile(map, point.x, point.y) !== "floor") continue;
+    const near = [
+      { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+    ].some((direction) => getTile(map, point.x + direction.x, point.y + direction.y) === "wall");
+    if (!near) continue;
+    if ((point.x * 7 + point.y * 11 + phase * 3) % density !== 0) continue;
+    setTile(map, point.x, point.y, "half_cover");
+    placed += 1;
+  }
+}
+
+/**
+ * Places purposeful cover. Unlike a generic cluster this takes explicit
+ * positions so a layout can say "barricades at the checkpoint" or "crates on
+ * the loading apron" instead of scattering tactical objects.
+ */
+export function paintFunctionalCover(map: GameMap, points: readonly Point[]): number {
+  let placed = 0;
+  for (const point of points) {
+    if (!inBounds(map, point.x, point.y)) continue;
+    if (getTile(map, point.x, point.y) !== "floor") continue;
+    setTile(map, point.x, point.y, "half_cover");
+    placed += 1;
+  }
+  return placed;
+}
+
+/**
+ * Copies the left half of a tile band onto the right half. Data Core layouts
+ * use this to obtain the near-symmetry that separates an engineered complex
+ * from a foundry or a wreck, even in a simplified semantic view.
+ */
+export function mirrorTilesHorizontally(map: GameMap, band: Rect): void {
+  const right = band.x + band.width - 1;
+  for (let y = band.y; y < band.y + band.height; y++) {
+    for (let offset = 0; offset < Math.floor(band.width / 2); offset++) {
+      const source = getTile(map, band.x + offset, y);
+      if (source === null) continue;
+      setTile(map, right - offset, y, source);
+    }
   }
 }

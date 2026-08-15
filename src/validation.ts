@@ -2,8 +2,14 @@ import type { GameMap, TileType, Unit } from "./map.ts";
 import { UNIT_AP, UNIT_HP, generateUnitId } from "./map.ts";
 import { DEFAULT_LEVEL_THEME_ID, isLevelThemeId } from "./themes.ts";
 import {
+  isEnvironmentProfile,
   isFloorTreatmentId,
+  isLandmarkAmbient,
+  isLandmarkImportance,
   isLandmarkKind,
+  isLandmarkOrientation,
+  isLandmarkVariant,
+  isZoneRole,
   type FloorTreatmentZone,
   type MapEnvironment,
   type MapLandmark,
@@ -38,8 +44,13 @@ const VALID_TEAMS: ReadonlySet<Unit["team"]> = new Set<Unit["team"]>([
 
 export const MAX_MAP_DIMENSION = 128;
 export const MAX_MAP_CELLS = 16_384;
-const MAX_LANDMARKS = 4;
-const MAX_FLOOR_ZONES = 8;
+// Generated encounters emit two to four landmarks; the higher ceiling exists so
+// hand-built review boards (the visual lab's landmark galleries) stay valid.
+const MAX_LANDMARKS = 6;
+// Owned features contribute a footprint zone plus a surrounding apron, so the
+// ceiling is two zones per landmark plus a little room for structural regions.
+const MAX_FLOOR_ZONES = 12;
+const MAX_OWNER_ID_LENGTH = 80;
 
 function isFiniteNonNegativeInt(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && Number.isInteger(n) && n >= 0;
@@ -83,6 +94,9 @@ function validateEnvironment(environment: unknown, width: number, height: number
       value.featureBudget.major > MAX_LANDMARKS || value.featureBudget.secondary > MAX_LANDMARKS || value.featureBudget.minor > 8) {
     pushError(issues, "INVALID_FEATURE_BUDGET", "Map feature budget must contain non-negative integer counts.");
   }
+  if (value.profile !== undefined && !isEnvironmentProfile(value.profile)) {
+    pushError(issues, "INVALID_ENVIRONMENT_PROFILE", "Map environment profile must be 'quiet' or 'heavy'.");
+  }
   if (!Array.isArray(value.landmarks) || value.landmarks.length > MAX_LANDMARKS) {
     pushError(issues, "INVALID_LANDMARKS", `Map environment may contain at most ${MAX_LANDMARKS} landmarks.`);
   } else {
@@ -90,7 +104,10 @@ function validateEnvironment(environment: unknown, width: number, height: number
     for (const item of value.landmarks) {
       if (!item || typeof item !== "object" || typeof item.id !== "string" || item.id.length === 0 || ids.has(item.id) ||
           typeof item.name !== "string" || item.name.length === 0 || !isLandmarkKind(item.kind) ||
-          (item.importance !== "major" && item.importance !== "secondary") || !validRect(item.rect, width, height)) {
+          !isLandmarkImportance(item.importance) || !validRect(item.rect, width, height) ||
+          (item.orientation !== undefined && !isLandmarkOrientation(item.orientation)) ||
+          (item.variant !== undefined && !isLandmarkVariant(item.variant)) ||
+          (item.ambient !== undefined && !isLandmarkAmbient(item.ambient))) {
         pushError(issues, "INVALID_LANDMARK", "Map contains malformed, duplicate, or out-of-bounds landmark metadata.");
         break;
       }
@@ -103,7 +120,9 @@ function validateEnvironment(environment: unknown, width: number, height: number
     const ids = new Set<string>();
     for (const zone of value.floorZones) {
       if (!zone || typeof zone !== "object" || typeof zone.id !== "string" || zone.id.length === 0 || ids.has(zone.id) ||
-          !isFloorTreatmentId(zone.treatment) || !validRect(zone.rect, width, height)) {
+          !isFloorTreatmentId(zone.treatment) || !validRect(zone.rect, width, height) ||
+          (zone.role !== undefined && !isZoneRole(zone.role)) ||
+          (zone.ownerId !== undefined && (typeof zone.ownerId !== "string" || zone.ownerId.length === 0))) {
         pushError(issues, "INVALID_FLOOR_ZONE", "Map contains malformed, duplicate, or out-of-bounds floor-treatment metadata.");
         break;
       }
@@ -347,17 +366,22 @@ function sanitizeEnvironment(
   for (const item of Array.isArray(raw.landmarks) ? raw.landmarks.slice(0, MAX_LANDMARKS) : []) {
     if (!isPlainObject(item) || typeof item.id !== "string" || item.id.length === 0 || landmarkIds.has(item.id) ||
         typeof item.name !== "string" || item.name.length === 0 || !isLandmarkKind(item.kind) ||
-        (item.importance !== "major" && item.importance !== "secondary") || !validRect(item.rect, width, height)) {
+        !isLandmarkImportance(item.importance) || !validRect(item.rect, width, height)) {
       pushWarning(issues, "INVALID_LANDMARK", "Dropped malformed or out-of-bounds landmark metadata.");
       continue;
     }
     landmarkIds.add(item.id);
+    // Identity fields are optional so pre-landmark-art saves stay loadable;
+    // unusable values are dropped rather than failing the whole map.
     landmarks.push({
       id: item.id.slice(0, 80),
       name: item.name.slice(0, 80),
       kind: item.kind,
       importance: item.importance,
       rect: { ...item.rect },
+      ...(isLandmarkOrientation(item.orientation) ? { orientation: item.orientation } : {}),
+      ...(isLandmarkVariant(item.variant) ? { variant: item.variant } : {}),
+      ...(isLandmarkAmbient(item.ambient) ? { ambient: item.ambient } : {}),
     });
   }
   const floorZones: FloorTreatmentZone[] = [];
@@ -369,9 +393,28 @@ function sanitizeEnvironment(
       continue;
     }
     floorZoneIds.add(zone.id);
-    floorZones.push({ id: zone.id.slice(0, 80), treatment: zone.treatment, rect: { ...zone.rect } });
+    floorZones.push({
+      id: zone.id.slice(0, 80),
+      treatment: zone.treatment,
+      rect: { ...zone.rect },
+      ...(isZoneRole(zone.role) ? { role: zone.role } : {}),
+      ...(typeof zone.ownerId === "string" && zone.ownerId.length > 0
+        ? { ownerId: zone.ownerId.slice(0, MAX_OWNER_ID_LENGTH) }
+        : {}),
+    });
   }
-  return { featureBudget: budget, landmarks, floorZones };
+  // A zone may only claim ownership of a landmark that survived sanitization.
+  const owned = floorZones.map((zone) =>
+    zone.ownerId !== undefined && !landmarkIds.has(zone.ownerId)
+      ? { ...zone, ownerId: undefined }
+      : zone
+  ).map(({ ownerId, ...rest }) => (ownerId === undefined ? rest : { ...rest, ownerId }));
+  return {
+    featureBudget: budget,
+    landmarks,
+    floorZones: owned,
+    ...(isEnvironmentProfile(raw.profile) ? { profile: raw.profile } : {}),
+  };
 }
 
 export function sanitizeLoadedMap(raw: unknown): {

@@ -2,7 +2,12 @@ import { canShootTarget } from "./combat.ts";
 import { getTile, inBounds, setTile, type GameMap, type TileType, type Unit } from "./map.ts";
 import { levelThemeId, type LevelThemeId } from "./themes.ts";
 import type { Point } from "./generationMotifs.ts";
-import { pointInRect } from "./environment.ts";
+import {
+  dominantLandmark,
+  isPrimaryLandmark,
+  pointInRect,
+  type MapLandmark,
+} from "./environment.ts";
 
 const DIRECTIONS = [
   { x: 1, y: 0 },
@@ -43,6 +48,18 @@ export type GeneratedMapMetrics = {
   floorQuietnessRatio: number;
   highAttentionFloorRatio: number;
   largestCalmRegion: number;
+  /** Footprint of the single feature the board is composed around. */
+  dominantFootprint: number;
+  /** Dominant footprint divided by the next largest feature's footprint. */
+  dominantFootprintRatio: number;
+  /** Share of half cover that sits within two tiles of a named feature. */
+  landmarkAdjacentCoverRatio: number;
+  /** Share of interior tiles that match their mirrored counterpart. */
+  mirrorSymmetryRatio: number;
+  /** Share of wall tiles belonging to a straight run of four or more. */
+  alignedWallRatio: number;
+  /** Share of wall tiles that terminate a structure instead of continuing it. */
+  wallEndpointRatio: number;
 };
 
 export type TacticalQualityIssue = {
@@ -361,9 +378,69 @@ function contestedCoverPositions(map: GameMap, contestedPoints: readonly Point[]
   })).length;
 }
 
+/**
+ * Mirror symmetry across the board's best axis. The Data Core family is built
+ * symmetrically on purpose, so this is the metric that proves the three
+ * families differ structurally and not merely by palette.
+ */
+function mirrorSymmetryRatio(map: GameMap): number {
+  let horizontal = 0;
+  let vertical = 0;
+  let total = 0;
+  for (let y = 1; y < map.height - 1; y++) {
+    for (let x = 1; x < map.width - 1; x++) {
+      total += 1;
+      if (getTile(map, x, y) === getTile(map, map.width - 1 - x, y)) horizontal += 1;
+      if (getTile(map, x, y) === getTile(map, x, map.height - 1 - y)) vertical += 1;
+    }
+  }
+  return total === 0 ? 0 : Math.max(horizontal, vertical) / total;
+}
+
+/**
+ * Long aligned runs read as industrial architecture; terminating stubs read as
+ * damage. Foundry layouts push the first ratio up, derelict layouts the second.
+ */
+function wallRunRatios(map: GameMap): { alignedWallRatio: number; wallEndpointRatio: number } {
+  const walls = tilePoints(map, "wall").filter((point) =>
+    point.x > 0 && point.y > 0 && point.x < map.width - 1 && point.y < map.height - 1
+  );
+  if (walls.length === 0) return { alignedWallRatio: 0, wallEndpointRatio: 0 };
+  let aligned = 0;
+  let endpoints = 0;
+  for (const point of walls) {
+    let horizontal = 1;
+    for (let step = 1; getTile(map, point.x - step, point.y) === "wall"; step++) horizontal += 1;
+    for (let step = 1; getTile(map, point.x + step, point.y) === "wall"; step++) horizontal += 1;
+    let vertical = 1;
+    for (let step = 1; getTile(map, point.x, point.y - step) === "wall"; step++) vertical += 1;
+    for (let step = 1; getTile(map, point.x, point.y + step) === "wall"; step++) vertical += 1;
+    if (Math.max(horizontal, vertical) >= 4) aligned += 1;
+    const neighbours = DIRECTIONS.filter((direction) =>
+      getTile(map, point.x + direction.x, point.y + direction.y) === "wall"
+    ).length;
+    if (neighbours <= 1) endpoints += 1;
+  }
+  return { alignedWallRatio: aligned / walls.length, wallEndpointRatio: endpoints / walls.length };
+}
+
+/** Cover that hugs a named feature is cover the environment explains. */
+function landmarkAdjacentCoverRatio(map: GameMap, landmarks: readonly MapLandmark[]): number {
+  const cover = tilePoints(map, "half_cover");
+  if (cover.length === 0) return 1;
+  if (landmarks.length === 0) return 0;
+  const owned = cover.filter((point) => landmarks.some(({ rect }) => pointInRect(
+    point.x,
+    point.y,
+    { x: rect.x - 2, y: rect.y - 2, width: rect.width + 4, height: rect.height + 4 },
+  )));
+  return owned.length / cover.length;
+}
+
 function environmentHierarchy(map: GameMap): Pick<GeneratedMapMetrics,
   "landmarkCount" | "majorLandmarkCount" | "secondaryStructureCount" |
-  "largestLandmarkFootprint" | "floorQuietnessRatio" | "highAttentionFloorRatio" | "largestCalmRegion"
+  "largestLandmarkFootprint" | "floorQuietnessRatio" | "highAttentionFloorRatio" | "largestCalmRegion" |
+  "dominantFootprint" | "dominantFootprintRatio" | "landmarkAdjacentCoverRatio"
 > {
   const environment = map.environment;
   const floors = tilePoints(map, "floor");
@@ -376,6 +453,9 @@ function environmentHierarchy(map: GameMap): Pick<GeneratedMapMetrics,
       floorQuietnessRatio: 1,
       highAttentionFloorRatio: 0,
       largestCalmRegion: floors.length,
+      dominantFootprint: 0,
+      dominantFootprintRatio: 0,
+      landmarkAdjacentCoverRatio: 1,
     };
   }
   const treated = new Set<string>();
@@ -417,14 +497,23 @@ function environmentHierarchy(map: GameMap): Pick<GeneratedMapMetrics,
     }
     largestCalmRegion = Math.max(largestCalmRegion, size);
   }
+  const dominant = dominantLandmark(environment);
+  const footprints = environment.landmarks
+    .map(({ rect }) => rect.width * rect.height)
+    .sort((a, b) => b - a);
+  const dominantFootprint = dominant ? dominant.rect.width * dominant.rect.height : 0;
+  const runnerUp = footprints.find((footprint) => footprint !== dominantFootprint) ?? footprints[1] ?? 0;
   return {
     landmarkCount: environment.landmarks.length,
-    majorLandmarkCount: environment.landmarks.filter(({ importance }) => importance === "major").length,
+    majorLandmarkCount: environment.landmarks.filter(isPrimaryLandmark).length,
     secondaryStructureCount: environment.landmarks.filter(({ importance }) => importance === "secondary").length,
-    largestLandmarkFootprint: Math.max(0, ...environment.landmarks.map(({ rect }) => rect.width * rect.height)),
+    largestLandmarkFootprint: footprints[0] ?? 0,
     floorQuietnessRatio: quiet.length / floors.length,
     highAttentionFloorRatio: attention.size / floors.length,
     largestCalmRegion,
+    dominantFootprint,
+    dominantFootprintRatio: runnerUp === 0 ? dominantFootprint : dominantFootprint / runnerUp,
+    landmarkAdjacentCoverRatio: landmarkAdjacentCoverRatio(map, environment.landmarks),
   };
 }
 
@@ -449,6 +538,8 @@ export function analyzeGeneratedMap(map: GameMap, contestedPoints: readonly Poin
     corridorTileCount: corridorTileCount(map),
     mandatoryChokeCount: mandatoryChokeCount(map),
     contestedCoverPositions: contestedCoverPositions(map, contestedPoints),
+    mirrorSymmetryRatio: mirrorSymmetryRatio(map),
+    ...wallRunRatios(map),
     ...environmentHierarchy(map),
   };
 }
@@ -493,8 +584,25 @@ export function validateGeneratedMap(
   if (metrics.themeId === "data_core" && !kinds.has("server_vault") && !kinds.has("data_core")) {
     add("WEAK_DATA_CORE_GRAMMAR", "Data Core layout lacks a controlled core or vault landmark.");
   }
-  if (metrics.themeId === "derelict" && !kinds.has("collapsed_room") && !kinds.has("scrap_heap")) {
+  if (metrics.themeId === "derelict" && !kinds.has("collapsed_room") && !kinds.has("scrap_heap") && !kinds.has("reactor_wreck")) {
     add("WEAK_DERELICT_GRAMMAR", "Derelict layout lacks a damaged architectural landmark.");
+  }
+  // Shape language. Each family must be separable from the others by geometry
+  // alone, which is what the lab's grayscale and semantic modes check by eye.
+  if (metrics.themeId === "industrial" && (metrics.longestWallRun < 8 || metrics.alignedWallRatio < 0.58)) {
+    add("WEAK_FOUNDRY_SHAPE", "Foundry layout lacks long aligned industrial runs.");
+  }
+  if (metrics.themeId === "data_core" && metrics.mirrorSymmetryRatio < 0.88) {
+    add("WEAK_DATA_CORE_SHAPE", "Data Core layout is not symmetrical enough to read as engineered.");
+  }
+  if (metrics.themeId === "derelict" && (metrics.alignedWallRatio > 0.8 || metrics.mirrorSymmetryRatio > 0.88)) {
+    add("WEAK_DERELICT_SHAPE", "Derelict layout is too aligned or too symmetrical to read as damaged.");
+  }
+  if (metrics.dominantFootprintRatio < 1.25 || metrics.dominantFootprint < 60) {
+    add("WEAK_DOMINANT_FEATURE", "No single feature is large enough to anchor the composition.");
+  }
+  if (metrics.landmarkAdjacentCoverRatio < 0.45) {
+    add("UNOWNED_COVER", "Most cover sits away from any named feature instead of belonging to one.");
   }
   if (metrics.landmarkCount < 2 || metrics.landmarkCount > 4) {
     add("WEAK_FEATURE_HIERARCHY", `Expected 2–4 named landmarks; found ${metrics.landmarkCount}.`);

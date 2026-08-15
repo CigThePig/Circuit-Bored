@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { UNIT_ARCHETYPES } from "../src/content.ts";
 import { previewShot } from "../src/combat.ts";
 import { validateMap } from "../src/validation.ts";
+import { dominantLandmark, LANDMARK_KINDS } from "../src/environment.ts";
+import { generatedEncounterDiagnostics } from "../src/generation.ts";
+import { pointsInRect } from "../src/generationMotifs.ts";
+import { getTile } from "../src/map.ts";
+import { landmarkArtKinds } from "../src/renderLandmarks.ts";
 import { buildVisualScenes } from "../tools/visual-scenes.ts";
 
 describe("visual laboratory", () => {
@@ -12,6 +17,9 @@ describe("visual laboratory", () => {
       "units",
       "overlays",
       "effects",
+      "landmarks-foundry",
+      "landmarks-data-core",
+      "landmarks-derelict",
       "generated-industrial-landmark",
       "generated-industrial-quiet",
       "generated-data-core-landmark",
@@ -89,5 +97,51 @@ describe("visual laboratory", () => {
     const quiet = first.filter((scene) => scene.id.endsWith("-quiet"));
     expect(landmarkHeavy.every((scene) => scene.state.map.environment!.landmarks.length === 4)).toBe(true);
     expect(quiet.every((scene) => scene.state.map.environment!.landmarks.length === 2)).toBe(true);
+    expect(landmarkHeavy.every((scene) => scene.state.map.environment!.profile === "heavy")).toBe(true);
+    expect(quiet.every((scene) => scene.state.map.environment!.profile === "quiet")).toBe(true);
+    for (const scene of first) {
+      // Every review board names its anchor so the lab can answer "what is
+      // this place?" without reading the tile grid.
+      const dominant = dominantLandmark(scene.state.map.environment);
+      expect(dominant).not.toBeNull();
+      expect(scene.description).toContain(dominant!.name);
+    }
+  });
+
+  it("shows every bespoke landmark family on a real painted board", () => {
+    const scenes = buildVisualScenes().filter((scene) => scene.id.startsWith("landmarks-"));
+    expect(scenes).toHaveLength(3);
+    const covered = new Set<string>();
+    for (const scene of scenes) {
+      const map = scene.state.map;
+      expect(validateMap(map).hasErrors).toBe(false);
+      const landmarks = map.environment!.landmarks;
+      expect(landmarks).toHaveLength(6);
+      for (const landmark of landmarks) {
+        covered.add(landmark.kind);
+        // Bespoke artwork is clipped to wall tiles, so a gallery entry with no
+        // solid mass would silently render nothing.
+        const solid = pointsInRect(landmark.rect)
+          .filter(({ x, y }) => getTile(map, x, y) === "wall").length;
+        expect(solid).toBeGreaterThan(0);
+        expect(scene.description).toContain(landmark.name);
+      }
+    }
+    // The galleries are the review surface for the art registry: every kind
+    // the renderer can draw has to appear on one of them.
+    expect(covered).toEqual(new Set(landmarkArtKinds()));
+    expect(covered.size).toBe(LANDMARK_KINDS.length);
+  });
+
+  it("reports the identity metadata a landmark review needs", () => {
+    const scene = buildVisualScenes().find((candidate) => candidate.id === "generated-industrial-landmark")!;
+    const diagnostics = generatedEncounterDiagnostics(scene.state.map)!;
+    expect(diagnostics.profile).toBe("heavy");
+    expect(diagnostics.dominantLandmark).not.toBeNull();
+    expect(diagnostics.dominantLandmark!.footprint).toBeGreaterThan(0);
+    expect(diagnostics.landmarks.length).toBe(scene.state.map.environment!.landmarks.length);
+    expect(diagnostics.landmarks.filter(({ importance }) => importance === "dominant")).toHaveLength(1);
+    expect(diagnostics.zoneRoles.length).toBeGreaterThan(0);
+    expect(diagnostics.metrics.dominantFootprintRatio).toBeGreaterThan(1);
   });
 });

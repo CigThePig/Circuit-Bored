@@ -1,6 +1,94 @@
 import { describe, expect, it } from "vitest";
-import { environmentVariant, resizeCanvasForMap } from "../src/render.ts";
-import { createEmptyMap } from "../src/map.ts";
+import { draw, environmentVariant, resizeCanvasForMap, type RenderState } from "../src/render.ts";
+import { drawLandmarkArt, landmarkArtKinds } from "../src/renderLandmarks.ts";
+import { LANDMARK_KINDS, type MapEnvironment } from "../src/environment.ts";
+import { createEmptyMap, setTile, type GameMap } from "../src/map.ts";
+import { generateEncounter } from "../src/generation.ts";
+import { createRun } from "../src/run.ts";
+import { SeededRng } from "../src/rng.ts";
+import { LEVEL_THEME_IDS } from "../src/themes.ts";
+
+/**
+ * A canvas stub that records both the drawing calls and the style changes the
+ * renderer makes, plus the clip regions it establishes. The point is to prove
+ * *where* artwork can land and that it is a pure function of the timestamp,
+ * not to compare rasterized images.
+ */
+function recordingContext(): {
+  ctx: CanvasRenderingContext2D;
+  calls: string[];
+  clipGroups: { x: number; y: number; w: number; h: number }[][];
+} {
+  const calls: string[] = [];
+  const clipGroups: { x: number; y: number; w: number; h: number }[][] = [];
+  let pending: { x: number; y: number; w: number; h: number }[] = [];
+  const style: Record<string, unknown> = {
+    globalAlpha: 1,
+    lineWidth: 1,
+    shadowBlur: 0,
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
+  };
+  const gradient = { addColorStop: () => undefined };
+  const overrides: Record<string, unknown> = {
+    canvas: { width: 0, height: 0 },
+    beginPath: () => { pending = []; },
+    rect: (x: number, y: number, w: number, h: number) => {
+      pending.push({ x, y, w, h });
+      calls.push(`rect(${x},${y},${w},${h})`);
+    },
+    clip: () => { clipGroups.push([...pending]); calls.push("clip()"); },
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient,
+    createPattern: () => null,
+    measureText: () => ({ width: 10 }),
+  };
+  const ctx = new Proxy({}, {
+    get(_target, property) {
+      const key = String(property);
+      if (key in overrides) return overrides[key];
+      if (key in style) return style[key];
+      return (...args: unknown[]) => {
+        calls.push(`${key}(${args.map((value) => String(value)).join(",")})`);
+      };
+    },
+    set(_target, property, value) {
+      style[String(property)] = value;
+      calls.push(`${String(property)}=${String(value)}`);
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+  return { ctx, calls, clipGroups };
+}
+
+function landmarkFixture(kindIndex: number): { map: GameMap; environment: MapEnvironment } {
+  const map = createEmptyMap();
+  map.width = 8;
+  map.height = 8;
+  map.tiles = new Array(64).fill("floor");
+  map.themeId = "industrial";
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 2; x <= 5; x++) setTile(map, x, y, "wall");
+  }
+  setTile(map, 3, 5, "half_cover");
+  const environment: MapEnvironment = {
+    featureBudget: { major: 1, secondary: 0, minor: 0 },
+    profile: "heavy",
+    landmarks: [{
+      id: "fixture",
+      name: "Fixture",
+      kind: LANDMARK_KINDS[kindIndex],
+      importance: "dominant",
+      rect: { x: 1, y: 1, width: 6, height: 6 },
+      orientation: "s",
+      variant: kindIndex % 4,
+      ambient: "furnace_pulse",
+    }],
+    floorZones: [],
+  };
+  map.environment = environment;
+  return { map, environment };
+}
 
 describe("procedural environment art", () => {
   it("keeps ordinary floor deterministic and deliberately quieter than tactical objects", () => {
@@ -37,6 +125,92 @@ describe("procedural environment art", () => {
     expect([...derelict]).not.toContain("exposed_conduit");
     expect([...industrial].filter((variant) => dataCore.has(variant))).toEqual([]);
     expect([...dataCore].filter((variant) => derelict.has(variant))).toEqual([]);
+  });
+
+  it("draws bespoke artwork for every landmark family", () => {
+    expect(new Set(landmarkArtKinds())).toEqual(new Set(LANDMARK_KINDS));
+    for (let index = 0; index < LANDMARK_KINDS.length; index++) {
+      const { map } = landmarkFixture(index);
+      const { ctx, calls } = recordingContext();
+      drawLandmarkArt(ctx, map, 40, 0);
+      expect(calls.length, `${LANDMARK_KINDS[index]} drew nothing`).toBeGreaterThan(0);
+    }
+  });
+
+  it("confines landmark artwork to tiles that already block movement", () => {
+    for (let index = 0; index < LANDMARK_KINDS.length; index++) {
+      const { map } = landmarkFixture(index);
+      const { ctx, clipGroups } = recordingContext();
+      drawLandmarkArt(ctx, map, 40, 0);
+      // The first clip is the footprint mask. Every later clip can only
+      // narrow it, so this single check bounds all of the artwork.
+      expect(clipGroups.length).toBeGreaterThan(0);
+      for (const rect of clipGroups[0]) {
+        const tileX = Math.round(rect.x / 40);
+        const tileY = Math.round(rect.y / 40);
+        // Artwork may only claim wall tiles: never floor, never half cover.
+        expect(map.tiles[tileY * map.width + tileX]).toBe("wall");
+      }
+    }
+  });
+
+  it("keeps landmark artwork deterministic and free of ambient drift when frozen", () => {
+    const { map } = landmarkFixture(0);
+    const first = recordingContext();
+    const second = recordingContext();
+    drawLandmarkArt(first.ctx, map, 40, 0, { animate: false });
+    drawLandmarkArt(second.ctx, map, 40, 9_999_999, { animate: false });
+    expect(second.calls).toEqual(first.calls);
+
+    // With ambient motion enabled the same landmark must still be a pure
+    // function of the timestamp.
+    const a = recordingContext();
+    const b = recordingContext();
+    drawLandmarkArt(a.ctx, map, 40, 1234);
+    drawLandmarkArt(b.ctx, map, 40, 1234);
+    expect(b.calls).toEqual(a.calls);
+    const later = recordingContext();
+    drawLandmarkArt(later.ctx, map, 40, 1234 + 900);
+    expect(later.calls).not.toEqual(a.calls);
+  });
+
+  it("skips landmark artwork entirely in the semantic diagnostic view", () => {
+    const run = createRun("RENDER-SEMANTIC");
+    const map = generateEncounter(new SeededRng("render-semantic"), 5, "final", run.squad, [], { themeId: "industrial" });
+    const base: RenderState = {
+      map,
+      selected: null,
+      highlights: [],
+      enemyPreviews: [],
+      floatingTexts: [],
+    };
+    const semantic = recordingContext();
+    const canvas = {
+      style: { width: `${map.width * 40}px`, height: `${map.height * 40}px` },
+      width: map.width * 40,
+      height: map.height * 40,
+      getContext: () => semantic.ctx,
+    } as unknown as HTMLCanvasElement;
+    draw(canvas, { ...base, terrainDiagnostic: true }, 0);
+    // The semantic view is a category readout: it must never clip to landmark
+    // masses, because that is the artwork path.
+    expect(semantic.clipGroups).toHaveLength(0);
+  });
+
+  it("renders landmark art for every generated theme without touching legacy maps", () => {
+    const run = createRun("RENDER-THEMES");
+    for (const themeId of LEVEL_THEME_IDS) {
+      const map = generateEncounter(new SeededRng(`render-${themeId}`), 5, "final", run.squad, [], { themeId });
+      const { ctx, calls } = recordingContext();
+      drawLandmarkArt(ctx, map, 40, 0);
+      expect(calls.length).toBeGreaterThan(0);
+    }
+    // A map saved before this pass has no environment at all and must simply
+    // draw nothing rather than throw.
+    const legacy = createEmptyMap();
+    const { ctx, calls } = recordingContext();
+    expect(() => drawLandmarkArt(ctx, legacy, 40, 0)).not.toThrow();
+    expect(calls).toHaveLength(0);
   });
 
   it("keeps 24x24 encounters at the documented 28 px readable minimum", () => {
