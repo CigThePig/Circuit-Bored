@@ -78,6 +78,7 @@ function sceneState(scene: VisualScene): RenderState {
     threatMarkers: [],
     sightLines: [],
     shotEffects: [],
+    movementEffects: [],
   };
 }
 

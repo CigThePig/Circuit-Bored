@@ -12,6 +12,7 @@ import {
   projectileKindForUnit,
   resizeCanvasForMap,
   type FloatingText,
+  type MovementEffect,
   type RenderState,
   type ShotEffect,
 } from "./render.ts";
@@ -94,7 +95,9 @@ export function startRuntime(
 
   const floatingTexts: FloatingText[] = [];
   const shotEffects: ShotEffect[] = [];
+  const movementEffects: MovementEffect[] = [];
   let shotEffectSequence = 0;
+  let movementEffectSequence = 0;
   const random = options.random ?? Math.random;
   const notifyState = () => options.onStateChange?.(cloneMap(map), turn);
 
@@ -108,6 +111,7 @@ export function startRuntime(
     threatMarkers: [],
     sightLines: [],
     shotEffects,
+    movementEffects,
   };
 
   resizeCanvasForMap(canvas, map);
@@ -159,7 +163,7 @@ export function startRuntime(
     state.coverIndicators = [];
     state.threatMarkers = [];
     state.sightLines = [];
-    if (turn !== "player") return;
+    if (turn !== "player" || busy) return;
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
@@ -224,7 +228,7 @@ export function startRuntime(
   const computeHighlights = () => {
     state.highlights = [];
     state.enemyPreviews = [];
-    if (!selected || turn !== "player") return;
+    if (!selected || turn !== "player" || busy) return;
     const moveCost = movementApCost(selected);
     if (selected.ap >= moveCost) {
       const adj = [
@@ -337,8 +341,8 @@ export function startRuntime(
     });
   };
 
-  const addShotEffect = (shooter: Unit, target: Unit, result: ShotResult) => {
-    shotEffects.push({
+  const addShotEffect = (shooter: Unit, target: Unit, result: ShotResult): ShotEffect => {
+    const effect: ShotEffect = {
       id: `shot-${shotEffectSequence++}`,
       shooterId: shooter.id,
       targetId: target.id,
@@ -355,7 +359,28 @@ export function startRuntime(
       hit: result.hit,
       startedAt: performance.now(),
       durationMs: result.mode === "peek" ? 560 : 460,
-    });
+    };
+    shotEffects.push(effect);
+    return effect;
+  };
+
+  const addMovementEffect = (
+    unit: Unit,
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ): MovementEffect => {
+    const effect: MovementEffect = {
+      id: `move-${movementEffectSequence++}`,
+      unitId: unit.id,
+      fromX: from.x,
+      fromY: from.y,
+      toX: to.x,
+      toY: to.y,
+      startedAt: performance.now(),
+      durationMs: 280,
+    };
+    movementEffects.push(effect);
+    return effect;
   };
 
   const checkOutcome = () => {
@@ -392,17 +417,24 @@ export function startRuntime(
       }
       selected.ap -= 2;
       const result = resolveShot(map, selected, tappedUnit, random);
-      addShotEffect(selected, tappedUnit, result);
+      const effect = addShotEffect(selected, tappedUnit, result);
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, tappedUnit.x, tappedUnit.y, "#ffd83a");
       } else {
         addFloating("MISS", tappedUnit.x, tappedUnit.y, "#fff");
       }
       if (selected.ap <= 0) selected = null;
+      busy = true;
       redraw();
       checkOutcome();
       notifyState();
       redraw();
+      void (async () => {
+        await delay(effect.durationMs);
+        if (cancelled) return;
+        busy = false;
+        redraw();
+      })();
       return;
     }
 
@@ -416,10 +448,21 @@ export function startRuntime(
       selected.ap -= moveCost;
       selected.movesThisTurn = (selected.movesThisTurn ?? 0) + 1;
       selected.peekExposure = null;
-      triggerEnemyOverwatchReactions(selected, from, { x, y });
-      if (selected.ap <= 0) selected = null;
+      const mover = selected;
+      const effect = addMovementEffect(mover, from, { x, y });
+      busy = true;
       notifyState();
       redraw();
+      void (async () => {
+        await delay(effect.durationMs);
+        if (cancelled) return;
+        await triggerEnemyOverwatchReactions(mover, from, { x, y });
+        if (cancelled) return;
+        if (mover.ap <= 0 || mover.hp <= 0) selected = null;
+        busy = false;
+        notifyState();
+        redraw();
+      })();
     }
   });
 
@@ -433,7 +476,7 @@ export function startRuntime(
       if (!overwatchShouldFire(map, p, enemy, from, to)) continue;
       p.resolvingOverwatch = true;
       const result = resolveShot(map, p, enemy, random);
-      addShotEffect(p, enemy, result);
+      const effect = addShotEffect(p, enemy, result);
       p.resolvingOverwatch = false;
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, enemy.x, enemy.y, "#ffd83a");
@@ -444,30 +487,34 @@ export function startRuntime(
       redraw();
       checkOutcome();
       notifyState();
-      await delay(350);
+      await delay(effect.durationMs);
       if (cancelled) return;
       break;
     }
   };
 
-  const triggerEnemyOverwatchReactions = (
+  async function triggerEnemyOverwatchReactions(
     player: Unit,
     from: { x: number; y: number },
     to: { x: number; y: number },
-  ) => {
+  ): Promise<void> {
     for (const enemy of map.units) {
       if (enemy.team !== "enemy" || enemy.hp <= 0) continue;
       if (!overwatchShouldFire(map, enemy, player, from, to)) continue;
       enemy.resolvingOverwatch = true;
       const result = resolveShot(map, enemy, player, random);
-      addShotEffect(enemy, player, result);
+      const effect = addShotEffect(enemy, player, result);
       enemy.resolvingOverwatch = false;
       enemy.overwatch = false;
       addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
+      redraw();
       checkOutcome();
+      notifyState();
+      await delay(effect.durationMs);
+      if (cancelled) return;
       break;
     }
-  };
+  }
 
   const animateEnemyTurn = async () => {
     busy = true;
@@ -483,7 +530,7 @@ export function startRuntime(
         const action = takeEnemyAction(map, enemy, aiSession, random);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
-          addShotEffect(enemy, action.target, action.result);
+          const effect = addShotEffect(enemy, action.target, action.result);
           if (action.result.hit) {
             addFloating(`HIT ${action.result.damage}`, action.target.x, action.target.y, "#ffd83a");
           } else {
@@ -492,12 +539,13 @@ export function startRuntime(
           redraw();
           checkOutcome();
           notifyState();
-          if (outcome !== null) break;
-          await delay(350);
+          await delay(effect.durationMs);
           if (cancelled) return;
+          if (outcome !== null) break;
         } else if (action.kind === "move") {
+          const effect = addMovementEffect(enemy, action.from, action.to);
           redraw();
-          await delay(350);
+          await delay(effect.durationMs);
           if (cancelled) return;
           await triggerOverwatchReactions(enemy, action.from, action.to);
           if (cancelled) return;
@@ -576,10 +624,19 @@ export function startRuntime(
         }
       }
     }
+    if (movementEffects.length > 0) {
+      const now = performance.now();
+      for (let i = movementEffects.length - 1; i >= 0; i--) {
+        if (!movementEffects[i].loop && movementEffects[i].startedAt + movementEffects[i].durationMs <= now) {
+          movementEffects.splice(i, 1);
+        }
+      }
+    }
     // Always repaint while a match is live so the unit idle bob and other
     // time-based effects (threat pulse, peek lean) stay smooth.
-    if (outcome === null) redraw();
-    if (outcome === null || floatingTexts.length > 0 || shotEffects.length > 0) {
+    const hasTransientEffects = floatingTexts.length > 0 || shotEffects.length > 0 || movementEffects.length > 0;
+    if (outcome === null || hasTransientEffects) redraw();
+    if (outcome === null || hasTransientEffects) {
       rafId = requestAnimationFrame(tick);
     } else {
       rafId = 0;

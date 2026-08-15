@@ -4,6 +4,7 @@ import {
 } from "../src/content.ts";
 import { generateEncounter } from "../src/generation.ts";
 import { setTile, type GameMap } from "../src/map.ts";
+import { previewShot } from "../src/combat.ts";
 import {
   projectileKindForUnit,
   type RenderState,
@@ -39,6 +40,7 @@ function emptyState(map: GameMap): RenderState {
     threatMarkers: [],
     sightLines: [],
     shotEffects: [],
+    movementEffects: [],
   };
 }
 
@@ -190,21 +192,27 @@ function overlayScene(): VisualScene {
 }
 
 function effectsScene(): VisualScene {
-  const map = emptyMap(15, 7);
+  const map = emptyMap(15, 13);
   const archetypes: UnitArchetypeId[] = ["runner", "operator", "scrapper", "marksman", "sentinel"];
   const shotEffects: ShotEffect[] = [];
+  const staticPhases = [0.12, 0.36, 0.58, 0.80, 0.88];
 
   archetypes.forEach((archetypeId, index) => {
-    const y = index + 1;
+    const y = 1 + index * 2;
     const shooter = makeArchetypeUnit(archetypeId, `effects-${archetypeId}`, 1, y);
-    const target = makeArchetypeUnit("rifleman", `effects-target-${index}`, 12, y);
+    const target = makeArchetypeUnit("rifleman", `effects-target-${index}`, 12, index === 1 ? y + 1 : y);
     target.hp = Math.max(1, target.maxHp - index);
     map.units.push(shooter, target);
     if (index === 1) {
       setTile(map, 2, y, "wall");
       setTile(map, 2, y - 1, "wall");
-      shooter.peekExposure = { x: 2, y: y + 1 };
     }
+    const preview = previewShot(map, shooter, target);
+    if (!preview.shot.canShoot || preview.shot.mode === "blocked") {
+      throw new Error(`Visual effects shot ${index} is not legal production geometry`);
+    }
+    if (preview.shot.mode === "peek") shooter.peekExposure = { ...preview.shot.from };
+    if (index === 4) target.hp = 0;
     const durationMs = 1200;
     shotEffects.push({
       id: `effects-shot-${index}`,
@@ -214,14 +222,14 @@ function effectsScene(): VisualScene {
       targetTeam: target.team,
       shooterX: shooter.x,
       shooterY: shooter.y,
-      fromX: index === 1 ? 2 : shooter.x,
-      fromY: index === 1 ? y + 1 : shooter.y,
-      toX: target.x,
-      toY: target.y,
-      mode: index === 1 ? "peek" : "direct",
+      fromX: preview.shot.from.x,
+      fromY: preview.shot.from.y,
+      toX: preview.targetPoint.x,
+      toY: preview.targetPoint.y,
+      mode: preview.shot.mode,
       projectile: projectileKindForUnit(shooter),
       hit: index !== 3,
-      startedAt: -durationMs * (0.12 + index * 0.14),
+      startedAt: -durationMs * staticPhases[index],
       durationMs,
       loop: true,
     });
@@ -229,11 +237,24 @@ function effectsScene(): VisualScene {
 
   const state = emptyState(map);
   state.shotEffects = shotEffects;
+  const mover = makeArchetypeUnit("runner", "effects-mover", 4, 11);
+  map.units.push(mover);
+  state.movementEffects = [{
+    id: "effects-move",
+    unitId: mover.id,
+    fromX: 1,
+    fromY: 11,
+    toX: mover.x,
+    toY: mover.y,
+    startedAt: -600,
+    durationMs: 1200,
+    loop: true,
+  }];
   return {
     id: "effects",
     title: "Weapon and impact sprites",
-    description: "Every projectile family, muzzle flash, peek-shot pose, miss marker, and hit reaction in a repeatable scene.",
-    review: "Shots should read by weapon family while cover leans and impacts remain visible at 28 px.",
+    description: "Every projectile family, muzzle flash, legal peek shot, impact, defeat fade, and tile movement in a repeatable scene.",
+    review: "Shots should leave their weapons, impacts and movement should read clearly, and cover leans must remain visible at 28 px.",
     state,
   };
 }
