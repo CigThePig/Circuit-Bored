@@ -3,8 +3,15 @@ import { getTile, type GameMap, type Unit } from "./map.ts";
 export type UnitVisualState = {
   spent?: boolean;
   inCover?: boolean;
+  coverDir?: { x: number; y: number } | null;
   peekDir?: { x: number; y: number } | null;
   aimingDir?: { x: number; y: number } | null;
+  firing?: number;
+  hitReaction?: number;
+  hitDir?: { x: number; y: number } | null;
+  defeatedFade?: number;
+  moving?: number;
+  moveDir?: { x: number; y: number } | null;
   nowMs?: number;
 };
 
@@ -13,25 +20,27 @@ const PLAYER_POSE = {
   idleBobAmount: 0.015,
   coverDrop: 0.055,
   coverScaleY: 0.92,
-  peekOffset: 0.14,
+  peekOffset: 0.24,
   handRadius: 0.055,
   handReach: 0.24,
   handVerticalReach: 0.12,
   weaponLength: 0.18,
 } as const;
 
-function isAdjacentToCover(map: GameMap, x: number, y: number): boolean {
+function adjacentCoverDirection(map: GameMap, x: number, y: number): { x: number; y: number } | null {
   const dirs: [number, number][] = [
     [1, 0],
     [-1, 0],
     [0, 1],
     [0, -1],
   ];
+  let halfCover: { x: number; y: number } | null = null;
   for (const [dx, dy] of dirs) {
     const t = getTile(map, x + dx, y + dy);
-    if (t === "wall" || t === "half_cover") return true;
+    if (t === "wall") return { x: dx, y: dy };
+    if (t === "half_cover" && !halfCover) halfCover = { x: dx, y: dy };
   }
-  return false;
+  return halfCover;
 }
 
 function computeUnitVisualState(
@@ -40,7 +49,8 @@ function computeUnitVisualState(
   nowMs: number,
 ): UnitVisualState {
   const spent = u.ap === 0;
-  const inCover = isAdjacentToCover(map, u.x, u.y);
+  const coverDir = adjacentCoverDirection(map, u.x, u.y);
+  const inCover = coverDir !== null;
   let peekDir: { x: number; y: number } | null = null;
   if (u.peekExposure) {
     // Clamp each axis to ±1 and normalize so diagonal and straight peeks
@@ -57,7 +67,7 @@ function computeUnitVisualState(
   }
   // TODO: aimingDir would require tracking the unit's current shot target;
   // for now we fall back to peek direction (or facing) inside the silhouette.
-  return { spent, inCover, peekDir, aimingDir: null, nowMs };
+  return { spent, inCover, coverDir, peekDir, aimingDir: null, nowMs };
 }
 
 export type FloatingText = {
@@ -93,6 +103,45 @@ export type SightLine = {
   toX: number;
   toY: number;
   hasCover: boolean;
+  shooterX?: number;
+  shooterY?: number;
+  mode?: "direct" | "peek";
+};
+
+export type ProjectileKind = "pulse" | "tracer" | "scatter" | "rail" | "heavy";
+
+export type ShotEffect = {
+  id: string;
+  shooterId: string;
+  targetId: string;
+  shooterTeam: Unit["team"];
+  targetTeam: Unit["team"];
+  shooterX: number;
+  shooterY: number;
+  targetX: number;
+  targetY: number;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  mode: "direct" | "peek";
+  projectile: ProjectileKind;
+  hit: boolean;
+  startedAt: number;
+  durationMs: number;
+  loop?: boolean;
+};
+
+export type MovementEffect = {
+  id: string;
+  unitId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  startedAt: number;
+  durationMs: number;
+  loop?: boolean;
 };
 
 export type RenderState = {
@@ -112,6 +161,8 @@ export type RenderState = {
   coverIndicators?: CoverIndicator[];
   threatMarkers?: ThreatMarker[];
   sightLines?: SightLine[];
+  shotEffects?: ShotEffect[];
+  movementEffects?: MovementEffect[];
 };
 
 const PALETTE = {
@@ -209,6 +260,32 @@ const PALETTE = {
 
 const ctxCache = new WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>();
 
+function shotEffectProgress(effect: ShotEffect, nowMs: number): number {
+  const duration = Math.max(1, effect.durationMs);
+  if (effect.loop) {
+    return (((nowMs - effect.startedAt) % duration) + duration) % duration / duration;
+  }
+  return (nowMs - effect.startedAt) / duration;
+}
+
+function shotEffectIsActive(effect: ShotEffect, nowMs: number): boolean {
+  const progress = shotEffectProgress(effect, nowMs);
+  return effect.loop || (progress >= 0 && progress <= 1);
+}
+
+function movementEffectProgress(effect: MovementEffect, nowMs: number): number {
+  const duration = Math.max(1, effect.durationMs);
+  if (effect.loop) {
+    return (((nowMs - effect.startedAt) % duration) + duration) % duration / duration;
+  }
+  return (nowMs - effect.startedAt) / duration;
+}
+
+function movementEffectIsActive(effect: MovementEffect, nowMs: number): boolean {
+  const progress = movementEffectProgress(effect, nowMs);
+  return effect.loop || (progress >= 0 && progress <= 1);
+}
+
 function getCtx(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   let ctx = ctxCache.get(canvas);
   if (!ctx) {
@@ -270,9 +347,58 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
   }
 
   for (const u of map.units) {
-    if (u.hp <= 0) continue;
+    const firingEffect = state.shotEffects?.find((effect) =>
+      effect.shooterId === u.id && shotEffectIsActive(effect, now)
+    );
+    const hitEffect = state.shotEffects?.find((effect) =>
+      effect.hit && effect.targetId === u.id && shotEffectIsActive(effect, now)
+    );
+    // Keep a defeated unit on the board for the impact/recoil frames. Once the
+    // effect expires the normal hp guard removes it.
+    if (u.hp <= 0 && !hitEffect) continue;
+    const movementEffect = state.movementEffects?.find((effect) =>
+      effect.unitId === u.id && movementEffectIsActive(effect, now)
+    );
     const isSelected = state.selected !== null && state.selected.id === u.id;
-    drawUnit(ctx, u.x * cell, u.y * cell, cell, u, isSelected, mapHeightPx, map, now, state.showUnitUi !== false);
+    const unitSightLines = state.sightLines?.filter((line) =>
+      line.shooterX === u.x && line.shooterY === u.y
+    );
+    const aimingLine = unitSightLines?.find((line) => line.mode === "peek") ?? unitSightLines?.[0];
+    let renderX = u.x;
+    let renderY = u.y;
+    if (movementEffect) {
+      const progress = Math.max(0, Math.min(1, movementEffectProgress(movementEffect, now)));
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      renderX = movementEffect.fromX + (movementEffect.toX - movementEffect.fromX) * eased;
+      renderY = movementEffect.fromY + (movementEffect.toY - movementEffect.fromY) * eased;
+    } else if (firingEffect) {
+      // A firing pose belongs to the position captured with the shot, even if
+      // gameplay state has already advanced the unit to another tile.
+      renderX = firingEffect.shooterX;
+      renderY = firingEffect.shooterY;
+    }
+    drawUnit(
+      ctx,
+      renderX * cell,
+      renderY * cell,
+      cell,
+      u,
+      isSelected,
+      mapHeightPx,
+      map,
+      now,
+      state.showUnitUi !== false,
+      firingEffect,
+      hitEffect,
+      aimingLine,
+      movementEffect,
+    );
+  }
+
+  if (state.shotEffects) {
+    for (const effect of state.shotEffects) drawShotEffect(ctx, cell, effect, now);
   }
 
   if (state.coverIndicators && state.coverIndicators.length > 0) {
@@ -449,6 +575,15 @@ function unitArtProfile(unit: Unit): UnitArtProfile {
   return UNIT_ART_PROFILES[unit.archetypeId as UnitShape] ?? fallback;
 }
 
+export function projectileKindForUnit(unit: Unit): ProjectileKind {
+  const weapon = unitArtProfile(unit).weapon;
+  if (weapon === "pistol") return "pulse";
+  if (weapon === "shotgun") return "scatter";
+  if (weapon === "rifle") return unit.archetypeId === "marksman" ? "rail" : "tracer";
+  if (weapon === "cannon") return "heavy";
+  return "tracer";
+}
+
 function drawUnitWeapon(
   ctx: CanvasRenderingContext2D,
   cell: number,
@@ -513,6 +648,7 @@ function drawUnitSilhouette(
   const outlineW = Math.max(1, cell * 0.035);
   const spent = visual.spent ?? false;
   const inCover = visual.inCover ?? false;
+  const coverDir = visual.coverDir ?? null;
   const peekDir = visual.peekDir ?? null;
   const nowMs = visual.nowMs ?? performance.now();
   const primary = spent ? bodyColor : profile.primary;
@@ -522,13 +658,27 @@ function drawUnitSilhouette(
   const aimDir = { x: aim.x / aimLength, y: aim.y / aimLength };
 
   const tSec = nowMs / 1000;
-  const idleBob = Math.sin(tSec * PLAYER_POSE.idleBobSpeed + u.x * 0.7 + u.y) * cell * PLAYER_POSE.idleBobAmount;
-  const coverDrop = inCover ? cell * PLAYER_POSE.coverDrop : 0;
+  const idleWave = Math.sin(tSec * PLAYER_POSE.idleBobSpeed + u.x * 0.7 + u.y);
+  const idleBob = idleWave * cell * PLAYER_POSE.idleBobAmount * (inCover ? 0.35 : 1);
+  const coverDrop = inCover ? cell * (PLAYER_POSE.coverDrop + (idleWave + 1) * 0.008) : 0;
   const coverScaleY = inCover ? PLAYER_POSE.coverScaleY : 1;
+  const coverTuckX = (coverDir?.x ?? 0) * cell * 0.075;
+  const coverTuckY = (coverDir?.y ?? 0) * cell * 0.075;
   const peekOffsetX = (peekDir?.x ?? 0) * cell * PLAYER_POSE.peekOffset;
   const peekOffsetY = (peekDir?.y ?? 0) * cell * PLAYER_POSE.peekOffset;
+  const firing = visual.firing ?? 0;
+  const kick = firing < 0.28 ? Math.sin((firing / 0.28) * Math.PI) * cell * 0.055 : 0;
+  const hit = visual.hitReaction ?? 0;
+  const hitDir = visual.hitDir ?? { x: 0, y: 0 };
+  const hitKick = hit * cell * 0.10;
+  const hitTwist = hit * (hitDir.x >= 0 ? -1 : 1) * 0.08;
+  const moving = visual.moving ?? 0;
+  const moveDir = visual.moveDir ?? { x: 0, y: 0 };
+  const strideTilt = (moveDir.x + moveDir.y * 0.55) * moving * 0.045;
+  const defeatedFade = visual.defeatedFade ?? 1;
 
   ctx.save();
+  ctx.globalAlpha *= defeatedFade;
   ctx.translate(cx, cy);
   const shadow = ctx.createRadialGradient(0, cell * 0.20, 0, 0, cell * 0.20, cell * 0.35);
   shadow.addColorStop(0, "rgba(0,0,0,.58)");
@@ -537,8 +687,12 @@ function drawUnitSilhouette(
   ctx.fillRect(-cell * 0.38, -cell * 0.02, cell * 0.76, cell * 0.48);
 
   ctx.save();
-  ctx.translate(peekOffsetX, peekOffsetY + idleBob + coverDrop);
-  ctx.scale(1, coverScaleY);
+  ctx.translate(
+    coverTuckX + peekOffsetX - aimDir.x * kick + hitDir.x * hitKick,
+    coverTuckY + peekOffsetY + idleBob + coverDrop + hitDir.y * hitKick,
+  );
+  ctx.rotate(hitTwist + strideTilt);
+  ctx.scale(1 + moving * 0.035, coverScaleY * (1 - moving * 0.045));
 
   // Archetype-specific shoulder geometry makes units legible before badges.
   const shoulderY = -cell * 0.08;
@@ -1097,34 +1251,326 @@ function drawSightLine(
   cell: number,
   line: SightLine,
 ): void {
-  const fromX = line.fromX * cell + cell / 2;
-  const fromY = line.fromY * cell + cell / 2;
+  const originX = line.fromX * cell + cell / 2;
+  const originY = line.fromY * cell + cell / 2;
   const toX = line.toX * cell + cell / 2;
   const toY = line.toY * cell + cell / 2;
+  const isPeek = line.mode === "peek" && line.shooterX !== undefined && line.shooterY !== undefined;
+  const shooterX = (line.shooterX ?? line.fromX) * cell + cell / 2;
+  const shooterY = (line.shooterY ?? line.fromY) * cell + cell / 2;
+  const peekDx = originX - shooterX;
+  const peekDy = originY - shooterY;
+  const peekLength = Math.hypot(peekDx, peekDy) || 1;
+  const startX = isPeek ? shooterX + (peekDx / peekLength) * cell * 0.34 : originX;
+  const startY = isPeek ? shooterY + (peekDy / peekLength) * cell * 0.34 : originY;
 
   const outerW = Math.max(2, Math.floor(cell * 0.09));
   const innerW = Math.max(1, Math.floor(cell * 0.025));
+  const tracePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    if (isPeek) ctx.lineTo(originX, originY);
+    ctx.lineTo(toX, toY);
+  };
 
   ctx.save();
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   ctx.setLineDash([Math.max(3, cell * 0.16), Math.max(2, cell * 0.12)]);
 
   ctx.strokeStyle = line.hasCover ? PALETTE.SIGHT_COVER_OUTER : PALETTE.SIGHT_CLEAR_OUTER;
   ctx.lineWidth = outerW;
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
+  tracePath();
   ctx.stroke();
 
   ctx.strokeStyle = line.hasCover ? PALETTE.SIGHT_COVER_INNER : PALETTE.SIGHT_CLEAR_INNER;
   ctx.lineWidth = innerW;
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
+  tracePath();
   ctx.stroke();
 
   ctx.setLineDash([]);
+  if (isPeek) {
+    const marker = Math.max(3, cell * 0.10);
+    ctx.shadowColor = PALETTE.SIGHT_CLEAR_INNER;
+    ctx.shadowBlur = cell * 0.12;
+    ctx.fillStyle = "#071018";
+    ctx.strokeStyle = PALETTE.SIGHT_CLEAR_INNER;
+    ctx.lineWidth = Math.max(1, cell * 0.035);
+    ctx.beginPath();
+    ctx.arc(originX, originY, marker, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(originX - (peekDx / peekLength) * marker * 0.45, originY - (peekDy / peekLength) * marker * 0.45);
+    ctx.lineTo(originX + (peekDx / peekLength) * marker * 0.55, originY + (peekDy / peekLength) * marker * 0.55);
+    ctx.stroke();
+  }
   ctx.restore();
+}
+
+function drawMuzzleSprite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  cell: number,
+  angle: number,
+  color: string,
+  strength: number,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.globalAlpha = strength;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = cell * 0.22;
+  ctx.fillStyle = "#fff6d5";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(cell * 0.24, -cell * 0.07);
+  ctx.lineTo(cell * 0.15, 0);
+  ctx.lineTo(cell * 0.24, cell * 0.07);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(0, 0, cell * 0.075, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawImpactSprite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  cell: number,
+  effect: ShotEffect,
+  progress: number,
+): void {
+  if (progress <= 0 || progress >= 1) return;
+  const teamColor = effect.targetTeam === "player" ? "#62e7ff" : "#ff6b72";
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = 1 - progress;
+  if (!effect.hit) {
+    ctx.strokeStyle = "#dcebf0";
+    ctx.lineWidth = Math.max(1, cell * 0.035);
+    ctx.setLineDash([cell * 0.08, cell * 0.06]);
+    ctx.beginPath();
+    ctx.moveTo(-cell * 0.13, -cell * 0.13);
+    ctx.lineTo(cell * 0.13, cell * 0.13);
+    ctx.moveTo(cell * 0.13, -cell * 0.13);
+    ctx.lineTo(-cell * 0.13, cell * 0.13);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  const radius = cell * (0.10 + progress * 0.34);
+  ctx.shadowColor = teamColor;
+  ctx.shadowBlur = cell * 0.18 * (1 - progress);
+  ctx.strokeStyle = teamColor;
+  ctx.lineWidth = Math.max(1, cell * 0.055 * (1 - progress));
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff4c2";
+  for (let i = 0; i < 7; i++) {
+    const angle = i * (Math.PI * 2 / 7) + 0.35;
+    const distance = cell * (0.10 + progress * (0.22 + (i % 3) * 0.04));
+    const size = Math.max(1.5, cell * (0.045 - progress * 0.022));
+    ctx.save();
+    ctx.rotate(angle);
+    ctx.translate(distance, 0);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-size / 2, -size / 2, size, size);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function projectileMuzzleReach(projectile: ProjectileKind): number {
+  if (projectile === "pulse") return 0.31;
+  if (projectile === "scatter") return 0.42;
+  if (projectile === "rail") return 0.56;
+  if (projectile === "heavy") return 0.47;
+  return 0.45;
+}
+
+/**
+ * Combat uses the exposure tile as the legal line-of-fire origin. Artwork uses
+ * the recorded shooter tile plus the character's lean and barrel length so a
+ * peek shot visibly leaves the gun instead of materialising one cell away.
+ */
+function shotVisualOrigin(
+  effect: ShotEffect,
+  cell: number,
+): { x: number; y: number } {
+  const shooterX = effect.shooterX * cell + cell / 2;
+  const shooterY = effect.shooterY * cell + cell / 2;
+  const aimX = effect.toX - effect.fromX;
+  const aimY = effect.toY - effect.fromY;
+  const aimLength = Math.hypot(aimX, aimY) || 1;
+  const aimDir = { x: aimX / aimLength, y: aimY / aimLength };
+
+  let leanX = 0;
+  let leanY = 0;
+  if (effect.mode === "peek") {
+    const peekX = effect.fromX - effect.shooterX;
+    const peekY = effect.fromY - effect.shooterY;
+    const peekLength = Math.hypot(peekX, peekY) || 1;
+    leanX = (peekX / peekLength) * cell * PLAYER_POSE.peekOffset;
+    leanY = (peekY / peekLength) * cell * PLAYER_POSE.peekOffset;
+  }
+
+  const reach = projectileMuzzleReach(effect.projectile) * cell;
+  return {
+    x: shooterX + leanX + aimDir.x * reach,
+    y: shooterY + leanY + aimDir.y * reach,
+  };
+}
+
+/**
+ * A target may be legally exposed from the adjacent peek tile while its body
+ * remains rendered as a short lean from its home tile. Keep combat's exposure
+ * coordinate in the effect, but terminate the artwork on that rendered body.
+ */
+function shotVisualEndpoint(
+  effect: ShotEffect,
+  cell: number,
+): { x: number; y: number } {
+  const targetX = effect.targetX * cell + cell / 2;
+  const targetY = effect.targetY * cell + cell / 2;
+  const exposureX = effect.toX - effect.targetX;
+  const exposureY = effect.toY - effect.targetY;
+  const exposureLength = Math.hypot(exposureX, exposureY);
+  if (exposureLength === 0) return { x: targetX, y: targetY };
+  return {
+    x: targetX + (exposureX / exposureLength) * cell * PLAYER_POSE.peekOffset,
+    y: targetY + (exposureY / exposureLength) * cell * PLAYER_POSE.peekOffset,
+  };
+}
+
+function effectHash(id: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function missedEndpoint(
+  effect: ShotEffect,
+  from: { x: number; y: number },
+  target: { x: number; y: number },
+  cell: number,
+): { x: number; y: number } {
+  const dx = target.x - from.x;
+  const dy = target.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const hash = effectHash(effect.id);
+  const side = (hash & 1) === 0 ? -1 : 1;
+  const lateral = cell * (0.44 + ((hash >>> 8) & 0x3) * 0.045) * side;
+  const forward = cell * (((hash >>> 4) & 0x3) - 1.5) * 0.045;
+  return {
+    x: target.x - uy * lateral + ux * forward,
+    y: target.y + ux * lateral + uy * forward,
+  };
+}
+
+function drawShotEffect(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  effect: ShotEffect,
+  nowMs: number,
+): void {
+  const progress = shotEffectProgress(effect, nowMs);
+  if (progress < 0 || progress > 1) return;
+  const visualOrigin = shotVisualOrigin(effect, cell);
+  const fromX = visualOrigin.x;
+  const fromY = visualOrigin.y;
+  const targetEndpoint = shotVisualEndpoint(effect, cell);
+  const visualEndpoint = effect.hit
+    ? targetEndpoint
+    : missedEndpoint(effect, visualOrigin, targetEndpoint, cell);
+  const toX = visualEndpoint.x;
+  const toY = visualEndpoint.y;
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const distance = Math.hypot(dx, dy) || 1;
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const px = -uy;
+  const py = ux;
+  const angle = Math.atan2(dy, dx);
+  const travel = Math.min(1, progress / 0.70);
+  const easedTravel = 1 - Math.pow(1 - travel, 2);
+  const headX = fromX + dx * easedTravel;
+  const headY = fromY + dy * easedTravel;
+  const playerShot = effect.shooterTeam === "player";
+  const baseColor = playerShot ? "#69e9ff" : "#ff765c";
+
+  if (progress < 0.18) {
+    drawMuzzleSprite(ctx, fromX, fromY, cell, angle, baseColor, 1 - progress / 0.18);
+  }
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.shadowColor = baseColor;
+  ctx.shadowBlur = cell * 0.16;
+
+  if (effect.projectile === "scatter") {
+    for (let i = -2; i <= 2; i++) {
+      const spread = i * cell * 0.055 * travel;
+      const pelletX = headX + px * spread;
+      const pelletY = headY + py * spread;
+      ctx.strokeStyle = i === 0 ? "#fff3bd" : "#ffb45f";
+      ctx.lineWidth = Math.max(1, cell * 0.035);
+      ctx.beginPath();
+      ctx.moveTo(pelletX - ux * cell * 0.11, pelletY - uy * cell * 0.11);
+      ctx.lineTo(pelletX, pelletY);
+      ctx.stroke();
+    }
+  } else if (effect.projectile === "heavy") {
+    const radius = cell * (0.10 + Math.sin(progress * Math.PI * 10) * 0.018);
+    ctx.fillStyle = "#fff0a3";
+    ctx.beginPath();
+    ctx.arc(headX, headY, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#ff9d43";
+    ctx.lineWidth = Math.max(1, cell * 0.045);
+    ctx.beginPath();
+    ctx.arc(headX, headY, radius * 1.55, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (effect.projectile === "rail") {
+    ctx.globalAlpha = Math.max(0, 1 - progress * 0.72);
+    ctx.strokeStyle = "#9b7cff";
+    ctx.lineWidth = Math.max(2, cell * 0.075);
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    ctx.lineTo(headX, headY);
+    ctx.stroke();
+    ctx.strokeStyle = "#f2ecff";
+    ctx.lineWidth = Math.max(1, cell * 0.022);
+    ctx.stroke();
+  } else {
+    const length = effect.projectile === "pulse" ? cell * 0.18 : cell * 0.32;
+    ctx.strokeStyle = effect.projectile === "pulse" ? "#ff7de3" : baseColor;
+    ctx.lineWidth = Math.max(2, cell * (effect.projectile === "pulse" ? 0.085 : 0.045));
+    ctx.beginPath();
+    ctx.moveTo(headX - ux * length, headY - uy * length);
+    ctx.lineTo(headX, headY);
+    ctx.stroke();
+    ctx.strokeStyle = "#eaffff";
+    ctx.lineWidth = Math.max(1, cell * 0.022);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  drawImpactSprite(ctx, toX, toY, cell, effect, Math.max(0, (progress - 0.68) / 0.32));
 }
 
 function drawUnit(
@@ -1138,6 +1584,10 @@ function drawUnit(
   map: GameMap,
   nowMs: number,
   showUnitUi: boolean,
+  firingEffect?: ShotEffect,
+  hitEffect?: ShotEffect,
+  aimingLine?: SightLine,
+  movementEffect?: MovementEffect,
 ): void {
   const cx = px + cell / 2;
   const cy = py + cell / 2;
@@ -1154,6 +1604,52 @@ function drawUnit(
         : PALETTE.ENEMY_BODY;
 
   const visual = computeUnitVisualState(map, u, nowMs);
+  if (aimingLine) {
+    const aimX = aimingLine.toX - aimingLine.fromX;
+    const aimY = aimingLine.toY - aimingLine.fromY;
+    const aimLength = Math.hypot(aimX, aimY) || 1;
+    visual.aimingDir = { x: aimX / aimLength, y: aimY / aimLength };
+    if (aimingLine.mode === "peek") {
+      const peekX = aimingLine.fromX - (aimingLine.shooterX ?? u.x);
+      const peekY = aimingLine.fromY - (aimingLine.shooterY ?? u.y);
+      const peekLength = Math.hypot(peekX, peekY) || 1;
+      visual.peekDir = { x: peekX / peekLength, y: peekY / peekLength };
+    }
+  }
+  if (firingEffect) {
+    visual.firing = Math.max(0, Math.min(1, shotEffectProgress(firingEffect, nowMs)));
+    const aimX = firingEffect.toX - firingEffect.fromX;
+    const aimY = firingEffect.toY - firingEffect.fromY;
+    const aimLength = Math.hypot(aimX, aimY) || 1;
+    visual.aimingDir = { x: aimX / aimLength, y: aimY / aimLength };
+    if (firingEffect.mode === "peek") {
+      const peekX = firingEffect.fromX - firingEffect.shooterX;
+      const peekY = firingEffect.fromY - firingEffect.shooterY;
+      const peekLength = Math.hypot(peekX, peekY) || 1;
+      visual.peekDir = { x: peekX / peekLength, y: peekY / peekLength };
+    }
+  }
+  if (hitEffect) {
+    const progress = Math.max(0, Math.min(1, shotEffectProgress(hitEffect, nowMs)));
+    visual.hitReaction = progress < 0.64 ? 0 : Math.sin(((progress - 0.64) / 0.36) * Math.PI);
+    const hitX = hitEffect.toX - hitEffect.fromX;
+    const hitY = hitEffect.toY - hitEffect.fromY;
+    const hitLength = Math.hypot(hitX, hitY) || 1;
+    visual.hitDir = { x: hitX / hitLength, y: hitY / hitLength };
+    if (u.hp <= 0) {
+      const fadeProgress = Math.max(0, Math.min(1, (progress - 0.74) / 0.26));
+      visual.defeatedFade = 1 - fadeProgress * 0.92;
+    }
+  }
+  if (movementEffect) {
+    const progress = Math.max(0, Math.min(1, movementEffectProgress(movementEffect, nowMs)));
+    visual.moving = Math.sin(progress * Math.PI);
+    const moveX = movementEffect.toX - movementEffect.fromX;
+    const moveY = movementEffect.toY - movementEffect.fromY;
+    const moveLength = Math.hypot(moveX, moveY) || 1;
+    visual.moveDir = { x: moveX / moveLength, y: moveY / moveLength };
+    if (!firingEffect && !aimingLine) visual.aimingDir = visual.moveDir;
+  }
 
   if (showUnitUi && fresh && !spent && u.team === "player") {
     ctx.save();
@@ -1177,7 +1673,7 @@ function drawUnit(
   }
 
   drawUnitSilhouette(ctx, px, py, cell, u, bodyColor, visual);
-  drawArchetypeBadge(ctx, px, py, cell, u);
+  if (u.hp > 0) drawArchetypeBadge(ctx, px, py, cell, u);
 
   if (showUnitUi && u.overwatch) {
     const ringR = cell * 0.38;
@@ -1215,7 +1711,7 @@ function drawUnit(
     ctx.restore();
   }
 
-  if (showUnitUi) {
+  if (showUnitUi && u.hp > 0) {
     drawHpChip(ctx, px, py, cell, u);
     drawApPips(ctx, px, py, cell, u, mapHeightPx);
   }

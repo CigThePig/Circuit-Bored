@@ -1,17 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { UNIT_ARCHETYPES } from "../src/content.ts";
+import { previewShot } from "../src/combat.ts";
 import { validateMap } from "../src/validation.ts";
 import { buildVisualScenes } from "../tools/visual-scenes.ts";
 
 describe("visual laboratory", () => {
   it("keeps a stable scene for every high-risk visual category", () => {
     const scenes = buildVisualScenes();
-    expect(scenes.map((scene) => scene.id)).toEqual(["terrain", "units", "overlays", "encounter"]);
+    expect(scenes.map((scene) => scene.id)).toEqual(["terrain", "units", "overlays", "effects", "encounter"]);
     for (const scene of scenes) {
       expect(scene.state.map.tiles).toHaveLength(scene.state.map.width * scene.state.map.height);
       expect(scene.description.length).toBeGreaterThan(20);
       expect(scene.review.length).toBeGreaterThan(20);
     }
+  });
+
+  it("covers every projectile family plus peek, hit, and miss animation states", () => {
+    const state = buildVisualScenes().find((scene) => scene.id === "effects")!.state;
+    const effects = state.shotEffects!;
+    expect(new Set(effects.map((effect) => effect.projectile)))
+      .toEqual(new Set(["pulse", "tracer", "scatter", "rail", "heavy"]));
+    expect(effects.some((effect) => effect.mode === "peek")).toBe(true);
+    expect(effects.some((effect) => effect.hit)).toBe(true);
+    expect(effects.some((effect) => !effect.hit)).toBe(true);
+    expect(effects.every((effect) => effect.loop)).toBe(true);
+    expect(effects.some((effect) => effect.hit && -effect.startedAt / effect.durationMs > 0.68)).toBe(true);
+    expect(effects.some((effect) => !effect.hit && -effect.startedAt / effect.durationMs > 0.68)).toBe(true);
+
+    for (const effect of effects) {
+      const shooter = state.map.units.find((unit) => unit.id === effect.shooterId)!;
+      const target = state.map.units.find((unit) => unit.id === effect.targetId)!;
+      expect(target.team).not.toBe(shooter.team);
+      expect({ x: effect.targetX, y: effect.targetY }).toEqual({ x: target.x, y: target.y });
+      // The defeated silhouette is an artwork state; restore one hit point so
+      // combat geometry can verify the canonical shot independently.
+      const originalHp = target.hp;
+      target.hp = Math.max(1, target.hp);
+      const preview = previewShot(state.map, shooter, target);
+      target.hp = originalHp;
+      expect(preview.shot.canShoot).toBe(true);
+      expect(preview.shot.mode).toBe(effect.mode);
+      expect(preview.shot.from).toEqual({ x: effect.fromX, y: effect.fromY });
+      expect(preview.targetPoint).toEqual({ x: effect.toX, y: effect.toY });
+    }
+
+    expect(state.movementEffects).toHaveLength(1);
+    expect(state.movementEffects![0]).toMatchObject({ loop: true, fromX: 1, toX: 4 });
   });
 
   it("shows every archetype and representative combat-overlay states", () => {

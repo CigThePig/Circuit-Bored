@@ -77,6 +77,8 @@ function sceneState(scene: VisualScene): RenderState {
     coverIndicators: [],
     threatMarkers: [],
     sightLines: [],
+    shotEffects: [],
+    movementEffects: [],
   };
 }
 
@@ -262,7 +264,7 @@ function buildSceneCards(): void {
 
 function handleShortcut(event: KeyboardEvent): void {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-  if (/^[1-4]$/.test(event.key)) {
+  if (/^[1-5]$/.test(event.key)) {
     scenes[Number(event.key) - 1]?.id && document.getElementById(`scene-${scenes[Number(event.key) - 1].id}`)?.scrollIntoView({ behavior: "smooth" });
   } else if (event.key.toLowerCase() === "g") {
     viewSelect.value = viewSelect.value === "grayscale" ? "normal" : "grayscale";

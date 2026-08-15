@@ -592,6 +592,9 @@ export type ShotResult = {
   damage: number;
   hitChance: number;
   hadCover: boolean;
+  mode: Exclude<ShotLineMode, "blocked">;
+  from: { x: number; y: number };
+  targetPoint: { x: number; y: number };
 };
 
 export function resolveShot(
@@ -642,5 +645,13 @@ export function resolveShot(
     const ddy = Math.max(-1, Math.min(1, shot.peekFrom.y - shooter.y));
     shooter.peekExposure = { x: shooter.x + ddx, y: shooter.y + ddy };
   }
-  return { hit, damage, hitChance, hadCover };
+  return {
+    hit,
+    damage,
+    hitChance,
+    hadCover,
+    mode: shot.mode === "peek" ? "peek" : "direct",
+    from: { ...shot.from },
+    targetPoint: { ...preview.targetPoint },
+  };
 }
