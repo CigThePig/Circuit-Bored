@@ -132,6 +132,23 @@ describe("AI movement", () => {
     expect(log.some((a) => a.kind === "wait")).toBe(true);
   });
 
+  it("never shoots through a connected wall barrier", () => {
+    const map = buildMap([
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+      "...#...",
+    ], [
+      { team: "player", x: 1, y: 2 },
+      { team: "enemy", x: 5, y: 2 },
+    ]);
+    const session = createAiSession();
+    const enemy = map.units[1];
+    beginEnemyTurn(map, enemy, session);
+    expect(takeEnemyAction(map, enemy, session).kind).not.toBe("shoot");
+  });
+
   it("routes toward a reachable target-adjacent tile when an equal-distance option is blocked", () => {
     const map = buildMap([
       "#..",

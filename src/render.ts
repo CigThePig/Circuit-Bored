@@ -53,16 +53,17 @@ function computeUnitVisualState(
   const inCover = coverDir !== null;
   let peekDir: { x: number; y: number } | null = null;
   if (u.peekExposure) {
-    // Clamp each axis to ±1 and normalize so diagonal and straight peeks
-    // both produce a unit-vector lean of magnitude PLAYER_POSE.peekOffset.
-    // Without this, diagonal peeks lean by 0.14 * sqrt(2) per cell, almost
-    // 0.2 cell, which reads as the sprite physically travelling toward the
-    // corner instead of leaning.
     const cx = Math.max(-1, Math.min(1, u.peekExposure.x - u.x));
     const cy = Math.max(-1, Math.min(1, u.peekExposure.y - u.y));
-    const len = Math.hypot(cx, cy);
-    if (len > 0) {
-      peekDir = { x: cx / len, y: cy / len };
+    // A diagonal exposure consists of one wall-axis step and one open
+    // shoulder step. Lean along the shoulder, not diagonally into the wall.
+    if (cx !== 0 && cy !== 0 && getTile(map, u.x + cx, u.y) === "wall") {
+      peekDir = { x: 0, y: cy };
+    } else if (cx !== 0 && cy !== 0 && getTile(map, u.x, u.y + cy) === "wall") {
+      peekDir = { x: cx, y: 0 };
+    } else {
+      const len = Math.hypot(cx, cy);
+      if (len > 0) peekDir = { x: cx / len, y: cy / len };
     }
   }
   // TODO: aimingDir would require tracking the unit's current shot target;
@@ -100,6 +101,8 @@ export type ThreatMarker = {
 export type SightLine = {
   fromX: number;
   fromY: number;
+  peekShoulderX?: number;
+  peekShoulderY?: number;
   toX: number;
   toY: number;
   hasCover: boolean;
@@ -122,6 +125,8 @@ export type ShotEffect = {
   targetY: number;
   fromX: number;
   fromY: number;
+  peekShoulderX?: number;
+  peekShoulderY?: number;
   toX: number;
   toY: number;
   mode: "direct" | "peek";
@@ -1258,8 +1263,10 @@ function drawSightLine(
   const isPeek = line.mode === "peek" && line.shooterX !== undefined && line.shooterY !== undefined;
   const shooterX = (line.shooterX ?? line.fromX) * cell + cell / 2;
   const shooterY = (line.shooterY ?? line.fromY) * cell + cell / 2;
-  const peekDx = originX - shooterX;
-  const peekDy = originY - shooterY;
+  const shoulderX = (line.peekShoulderX ?? line.fromX) * cell + cell / 2;
+  const shoulderY = (line.peekShoulderY ?? line.fromY) * cell + cell / 2;
+  const peekDx = shoulderX - shooterX;
+  const peekDy = shoulderY - shooterY;
   const peekLength = Math.hypot(peekDx, peekDy) || 1;
   const startX = isPeek ? shooterX + (peekDx / peekLength) * cell * 0.34 : originX;
   const startY = isPeek ? shooterY + (peekDy / peekLength) * cell * 0.34 : originY;
@@ -1416,8 +1423,9 @@ function shotVisualOrigin(
   let leanX = 0;
   let leanY = 0;
   if (effect.mode === "peek") {
-    const peekX = effect.fromX - effect.shooterX;
-    const peekY = effect.fromY - effect.shooterY;
+    const hasShoulder = effect.peekShoulderX !== undefined && effect.peekShoulderY !== undefined;
+    const peekX = (hasShoulder ? effect.peekShoulderX! : effect.fromX) - effect.shooterX;
+    const peekY = (hasShoulder ? effect.peekShoulderY! : effect.fromY) - effect.shooterY;
     const peekLength = Math.hypot(peekX, peekY) || 1;
     leanX = (peekX / peekLength) * cell * PLAYER_POSE.peekOffset;
     leanY = (peekY / peekLength) * cell * PLAYER_POSE.peekOffset;
@@ -1481,6 +1489,102 @@ function missedEndpoint(
   };
 }
 
+type EffectPathPoint = { x: number; y: number };
+
+function shotEffectPath(
+  effect: ShotEffect,
+  cell: number,
+  origin: EffectPathPoint,
+  endpoint: EffectPathPoint,
+): EffectPathPoint[] {
+  if (
+    effect.mode !== "peek" ||
+    effect.peekShoulderX === undefined ||
+    effect.peekShoulderY === undefined
+  ) {
+    return [origin, endpoint];
+  }
+
+  const shooter = {
+    x: effect.shooterX * cell + cell / 2,
+    y: effect.shooterY * cell + cell / 2,
+  };
+  const shoulder = {
+    x: effect.peekShoulderX * cell + cell / 2,
+    y: effect.peekShoulderY * cell + cell / 2,
+  };
+  const exposure = {
+    x: effect.fromX * cell + cell / 2,
+    y: effect.fromY * cell + cell / 2,
+  };
+  const sideX = Math.sign(shoulder.x - shooter.x);
+  const sideY = Math.sign(shoulder.y - shooter.y);
+  const wallX = Math.sign(exposure.x - shoulder.x);
+  const wallY = Math.sign(exposure.y - shoulder.y);
+  // This point sits just beyond the wall corner on the open shoulder side.
+  // Routing through it prevents a legal peek tracer from being painted as a
+  // straight line across the connected wall that the shooter is using.
+  const clearance = {
+    x: shooter.x + sideX * cell * 0.52 + wallX * cell * 0.48,
+    y: shooter.y + sideY * cell * 0.52 + wallY * cell * 0.48,
+  };
+  return [origin, clearance, exposure, endpoint];
+}
+
+function pointAlongEffectPath(
+  points: EffectPathPoint[],
+  progress: number,
+): { x: number; y: number; ux: number; uy: number } {
+  const segments = points.slice(1).map((point, index) => {
+    const start = points[index];
+    return { start, end: point, length: Math.hypot(point.x - start.x, point.y - start.y) };
+  });
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0) || 1;
+  let remaining = Math.max(0, Math.min(1, progress)) * total;
+  for (const segment of segments) {
+    if (remaining <= segment.length || segment === segments[segments.length - 1]) {
+      const ratio = segment.length > 0 ? Math.min(1, remaining / segment.length) : 1;
+      const ux = segment.length > 0 ? (segment.end.x - segment.start.x) / segment.length : 1;
+      const uy = segment.length > 0 ? (segment.end.y - segment.start.y) / segment.length : 0;
+      return {
+        x: segment.start.x + (segment.end.x - segment.start.x) * ratio,
+        y: segment.start.y + (segment.end.y - segment.start.y) * ratio,
+        ux,
+        uy,
+      };
+    }
+    remaining -= segment.length;
+  }
+  const end = points[points.length - 1];
+  return { x: end.x, y: end.y, ux: 1, uy: 0 };
+}
+
+function traceEffectPath(
+  ctx: CanvasRenderingContext2D,
+  points: EffectPathPoint[],
+  progress: number,
+): void {
+  const head = pointAlongEffectPath(points, progress);
+  const segments = points.slice(1).map((point, index) => ({
+    start: points[index],
+    end: point,
+    length: Math.hypot(point.x - points[index].x, point.y - points[index].y),
+  }));
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0) || 1;
+  let remaining = Math.max(0, Math.min(1, progress)) * total;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (const segment of segments) {
+    if (remaining >= segment.length) {
+      ctx.lineTo(segment.end.x, segment.end.y);
+      remaining -= segment.length;
+      continue;
+    }
+    ctx.lineTo(head.x, head.y);
+    break;
+  }
+}
+
 function drawShotEffect(
   ctx: CanvasRenderingContext2D,
   cell: number,
@@ -1498,18 +1602,22 @@ function drawShotEffect(
     : missedEndpoint(effect, visualOrigin, targetEndpoint, cell);
   const toX = visualEndpoint.x;
   const toY = visualEndpoint.y;
-  const dx = toX - fromX;
-  const dy = toY - fromY;
-  const distance = Math.hypot(dx, dy) || 1;
-  const ux = dx / distance;
-  const uy = dy / distance;
-  const px = -uy;
-  const py = ux;
-  const angle = Math.atan2(dy, dx);
+  const path = shotEffectPath(effect, cell, visualOrigin, visualEndpoint);
+  const initialDx = path[1].x - path[0].x;
+  const initialDy = path[1].y - path[0].y;
+  const initialLength = Math.hypot(initialDx, initialDy) || 1;
+  let ux = initialDx / initialLength;
+  let uy = initialDy / initialLength;
+  const angle = Math.atan2(initialDy, initialDx);
   const travel = Math.min(1, progress / 0.70);
   const easedTravel = 1 - Math.pow(1 - travel, 2);
-  const headX = fromX + dx * easedTravel;
-  const headY = fromY + dy * easedTravel;
+  const head = pointAlongEffectPath(path, easedTravel);
+  const headX = head.x;
+  const headY = head.y;
+  ux = head.ux;
+  uy = head.uy;
+  const headPx = -uy;
+  const headPy = ux;
   const playerShot = effect.shooterTeam === "player";
   const baseColor = playerShot ? "#69e9ff" : "#ff765c";
 
@@ -1525,8 +1633,8 @@ function drawShotEffect(
   if (effect.projectile === "scatter") {
     for (let i = -2; i <= 2; i++) {
       const spread = i * cell * 0.055 * travel;
-      const pelletX = headX + px * spread;
-      const pelletY = headY + py * spread;
+      const pelletX = headX + headPx * spread;
+      const pelletY = headY + headPy * spread;
       ctx.strokeStyle = i === 0 ? "#fff3bd" : "#ffb45f";
       ctx.lineWidth = Math.max(1, cell * 0.035);
       ctx.beginPath();
@@ -1549,9 +1657,7 @@ function drawShotEffect(
     ctx.globalAlpha = Math.max(0, 1 - progress * 0.72);
     ctx.strokeStyle = "#9b7cff";
     ctx.lineWidth = Math.max(2, cell * 0.075);
-    ctx.beginPath();
-    ctx.moveTo(fromX, fromY);
-    ctx.lineTo(headX, headY);
+    traceEffectPath(ctx, path, easedTravel);
     ctx.stroke();
     ctx.strokeStyle = "#f2ecff";
     ctx.lineWidth = Math.max(1, cell * 0.022);
@@ -1610,8 +1716,8 @@ function drawUnit(
     const aimLength = Math.hypot(aimX, aimY) || 1;
     visual.aimingDir = { x: aimX / aimLength, y: aimY / aimLength };
     if (aimingLine.mode === "peek") {
-      const peekX = aimingLine.fromX - (aimingLine.shooterX ?? u.x);
-      const peekY = aimingLine.fromY - (aimingLine.shooterY ?? u.y);
+      const peekX = (aimingLine.peekShoulderX ?? aimingLine.fromX) - (aimingLine.shooterX ?? u.x);
+      const peekY = (aimingLine.peekShoulderY ?? aimingLine.fromY) - (aimingLine.shooterY ?? u.y);
       const peekLength = Math.hypot(peekX, peekY) || 1;
       visual.peekDir = { x: peekX / peekLength, y: peekY / peekLength };
     }
@@ -1623,8 +1729,8 @@ function drawUnit(
     const aimLength = Math.hypot(aimX, aimY) || 1;
     visual.aimingDir = { x: aimX / aimLength, y: aimY / aimLength };
     if (firingEffect.mode === "peek") {
-      const peekX = firingEffect.fromX - firingEffect.shooterX;
-      const peekY = firingEffect.fromY - firingEffect.shooterY;
+      const peekX = (firingEffect.peekShoulderX ?? firingEffect.fromX) - firingEffect.shooterX;
+      const peekY = (firingEffect.peekShoulderY ?? firingEffect.fromY) - firingEffect.shooterY;
       const peekLength = Math.hypot(peekX, peekY) || 1;
       visual.peekDir = { x: peekX / peekLength, y: peekY / peekLength };
     }
