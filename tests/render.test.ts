@@ -54,11 +54,39 @@ describe("procedural environment art", () => {
     map.height = 24;
     map.tiles = new Array(576).fill("floor");
     try {
-      expect(resizeCanvasForMap(canvas, map)).toBe(28);
+      expect(resizeCanvasForMap(canvas, map, 28)).toBe(28);
       expect(canvas.style.width).toBe("672px");
       expect(canvas.style.height).toBe("672px");
       expect(canvas.width).toBe(1344);
       expect(transforms.at(-1)).toEqual([2, 0, 0, 2, 0, 0]);
+    } finally {
+      if (previousWindow) Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
+      else delete (globalThis as { window?: Window }).window;
+    }
+  });
+
+  it("fits large editor maps instead of applying the encounter cell-size minimum", () => {
+    const previousWindow = (globalThis as { window?: Window }).window;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { innerWidth: 480, devicePixelRatio: 2 },
+    });
+    const canvas = {
+      style: { width: "", height: "" },
+      width: 0,
+      height: 0,
+      getContext: () => ({ setTransform: () => undefined }),
+    } as unknown as HTMLCanvasElement;
+    const map = createEmptyMap();
+    map.width = 128;
+    map.height = 128;
+    map.tiles = new Array(128 * 128).fill("floor");
+    try {
+      expect(resizeCanvasForMap(canvas, map)).toBe(3);
+      expect(canvas.style.width).toBe("384px");
+      expect(canvas.style.height).toBe("384px");
+      expect(canvas.width).toBe(768);
+      expect(canvas.height).toBe(768);
     } finally {
       if (previousWindow) Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
       else delete (globalThis as { window?: Window }).window;

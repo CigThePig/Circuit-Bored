@@ -421,12 +421,12 @@ function getCtx(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   return ctx;
 }
 
-export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
+export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap, minimumCellSize = 1): number {
   const cssWidth = Math.max(1, Math.min(window.innerWidth, 480));
-  // A 24x24 encounter cannot remain readable if it is crushed into a phone's
-  // viewport. Preserve the documented 28 px gameplay minimum and let the board
-  // shell pan on smaller screens.
-  const cell = Math.max(28, Math.floor(cssWidth / map.width));
+  // Generated encounters opt into the documented 28 px gameplay minimum and
+  // let the board shell pan on smaller screens. Editor maps keep their fitted
+  // cell size so a valid large map cannot allocate an oversized backing canvas.
+  const cell = Math.max(1, minimumCellSize, Math.floor(cssWidth / map.width));
   const widthPx = cell * map.width;
   const heightPx = cell * map.height;
   const dpr = window.devicePixelRatio || 1;
