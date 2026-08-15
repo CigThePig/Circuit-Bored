@@ -1,4 +1,5 @@
 import { getTile, type GameMap, type Unit } from "./map.ts";
+import { floorTreatmentAt, type FloorTreatmentZone } from "./environment.ts";
 import {
   DEFAULT_LEVEL_THEME_ID,
   levelThemeId,
@@ -173,6 +174,8 @@ export type RenderState = {
   sightLines?: SightLine[];
   shotEffects?: ShotEffect[];
   movementEffects?: MovementEffect[];
+  /** Development-only flat category view used by the visual laboratory. */
+  terrainDiagnostic?: boolean;
 };
 
 const PALETTE = {
@@ -455,15 +458,19 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
     for (let x = 0; x < map.width; x++) {
       const t = map.tiles[y * map.width + x];
       const px = x * cell;
-      if (t === "wall") {
+      if (state.terrainDiagnostic) {
+        drawSemanticTile(ctx, px, py, cell, t);
+      } else if (t === "wall") {
         drawWallTile(ctx, px, py, cell, x, y, map, levelThemeId(map.themeId));
       } else if (t === "half_cover") {
-        drawHalfCoverTile(ctx, px, py, cell, x, y, levelThemeId(map.themeId));
+        drawHalfCoverTile(ctx, px, py, cell, x, y, map, levelThemeId(map.themeId));
       } else {
-        drawFloorTile(ctx, px, py, cell, x, y, levelThemeId(map.themeId));
+        drawFloorTile(ctx, px, py, cell, x, y, map, levelThemeId(map.themeId));
       }
     }
   }
+
+  drawLandmarkFootprints(ctx, map, cell, state.terrainDiagnostic === true);
 
   for (const h of state.highlights) {
     drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border, h.kind ?? "move");
@@ -600,8 +607,7 @@ export function environmentVariant(
   const variant = tileHash(x + salt, y - salt) % 12;
   if (themeId === "data_core") {
     if (tile === "floor") {
-      if (variant === 0 || variant === 6) return "access_grid";
-      if (variant === 4) return "illuminated_strip";
+      if (variant === 0) return "access_grid";
       return "clean_panel";
     }
     if (tile === "wall") {
@@ -615,9 +621,8 @@ export function environmentVariant(
   }
   if (themeId === "derelict") {
     if (tile === "floor") {
-      if (variant === 0 || variant === 6) return "broken_plate";
-      if (variant === 4) return "maintenance_grate";
-      if (variant === 8 || variant === 9) return "exposed_conduit";
+      if (variant === 0) return "broken_plate";
+      if (variant === 6) return "maintenance_grate";
       return "worn_deck";
     }
     if (tile === "wall") {
@@ -631,8 +636,6 @@ export function environmentVariant(
   }
   if (tile === "floor") {
     if (variant === 0) return "service_hatch";
-    if (variant === 4) return "vent";
-    if (variant === 8 || variant === 9) return "conduit";
     return "deck";
   }
   if (tile === "wall") {
@@ -998,6 +1001,117 @@ function drawUnitSilhouette(
   ctx.restore();
 }
 
+function drawSemanticTile(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  tile: "floor" | "wall" | "half_cover",
+): void {
+  ctx.fillStyle = tile === "floor" ? "#111820" : tile === "wall" ? "#d7e3e8" : "#78919c";
+  ctx.fillRect(px, py, cell, cell);
+  ctx.strokeStyle = tile === "floor" ? "#202d36" : "#071018";
+  ctx.lineWidth = Math.max(1, cell * 0.045);
+  ctx.strokeRect(px + 0.5, py + 0.5, cell - 1, cell - 1);
+  if (tile === "half_cover") {
+    ctx.beginPath();
+    ctx.moveTo(px + cell * 0.22, py + cell * 0.22);
+    ctx.lineTo(px + cell * 0.78, py + cell * 0.78);
+    ctx.moveTo(px + cell * 0.78, py + cell * 0.22);
+    ctx.lineTo(px + cell * 0.22, py + cell * 0.78);
+    ctx.stroke();
+  }
+}
+
+function drawLandmarkFootprints(
+  ctx: CanvasRenderingContext2D,
+  map: GameMap,
+  cell: number,
+  diagnostic: boolean,
+): void {
+  if (!map.environment) return;
+  const terrain = TERRAIN_PALETTES[levelThemeId(map.themeId)];
+  ctx.save();
+  for (const landmark of map.environment.landmarks) {
+    const { x, y, width, height } = landmark.rect;
+    const inset = diagnostic ? cell * 0.08 : cell * 0.12;
+    ctx.strokeStyle = diagnostic
+      ? (landmark.importance === "major" ? "#ffd75a" : "#e8f4f8")
+      : terrain.floorGlyph;
+    ctx.lineWidth = diagnostic ? Math.max(2, cell * 0.08) : Math.max(1, cell * 0.025);
+    ctx.setLineDash(landmark.importance === "major" ? [] : [cell * 0.28, cell * 0.18]);
+    ctx.strokeRect(x * cell + inset, y * cell + inset, width * cell - inset * 2, height * cell - inset * 2);
+  }
+  ctx.restore();
+}
+
+function drawRegionalFloorTreatment(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  x: number,
+  y: number,
+  zone: FloorTreatmentZone,
+  themeId: LevelThemeId,
+): void {
+  const terrain = TERRAIN_PALETTES[themeId];
+  const localX = x - zone.rect.x;
+  const localY = y - zone.rect.y;
+  const centerX = Math.floor((zone.rect.width - 1) / 2);
+  const centerY = Math.floor((zone.rect.height - 1) / 2);
+  ctx.save();
+  ctx.strokeStyle = terrain.floorGlyph;
+  ctx.fillStyle = terrain.floorSeam;
+  ctx.lineWidth = Math.max(1, cell * 0.025);
+  if (zone.treatment === "service_lane" || zone.treatment === "server_hall") {
+    const vertical = zone.rect.height > zone.rect.width;
+    if ((vertical && localX === centerX) || (!vertical && localY === centerY)) {
+      ctx.beginPath();
+      if (vertical) {
+        ctx.moveTo(px + cell * 0.42, py);
+        ctx.lineTo(px + cell * 0.42, py + cell);
+        ctx.moveTo(px + cell * 0.58, py);
+        ctx.lineTo(px + cell * 0.58, py + cell);
+      } else {
+        ctx.moveTo(px, py + cell * 0.42);
+        ctx.lineTo(px + cell, py + cell * 0.42);
+        ctx.moveTo(px, py + cell * 0.58);
+        ctx.lineTo(px + cell, py + cell * 0.58);
+      }
+      ctx.stroke();
+    }
+  } else if (zone.treatment === "checkpoint_threshold") {
+    if (localY === centerY) {
+      ctx.fillRect(px, py + cell * 0.35, cell, cell * 0.08);
+      ctx.fillRect(px, py + cell * 0.57, cell, cell * 0.08);
+    }
+  } else if (zone.treatment === "vault_grid") {
+    if (localX % 3 === 0) ctx.fillRect(px + cell * 0.08, py, Math.max(1, cell * 0.035), cell);
+    if (localY % 3 === 0) ctx.fillRect(px, py + cell * 0.08, cell, Math.max(1, cell * 0.035));
+  } else if (zone.treatment === "loading_apron") {
+    if (localY === 1 || localY === zone.rect.height - 2) {
+      ctx.globalAlpha = 0.62;
+      ctx.fillRect(px + (localX % 2 === 0 ? 0 : cell * 0.5), py + cell * 0.44, cell * 0.5, cell * 0.12);
+    }
+  } else if (zone.treatment === "machine_bay") {
+    const perimeter = localX === 0 || localY === 0 || localX === zone.rect.width - 1 || localY === zone.rect.height - 1;
+    if (perimeter && (localX + localY) % 3 === 0) {
+      ctx.strokeRect(px + cell * 0.23, py + cell * 0.23, cell * 0.54, cell * 0.54);
+    }
+  } else if (zone.treatment === "collapsed_deck" || zone.treatment === "salvage_wear" || zone.treatment === "breach_scars") {
+    if ((localX * 3 + localY * 5) % 11 === 0) {
+      ctx.strokeStyle = terrain.floorWear;
+      ctx.beginPath();
+      ctx.moveTo(px + cell * 0.16, py + cell * 0.28);
+      ctx.lineTo(px + cell * 0.48, py + cell * 0.52);
+      ctx.lineTo(px + cell * 0.82, py + cell * 0.40);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 function drawFloorTile(
   ctx: CanvasRenderingContext2D,
   px: number,
@@ -1005,101 +1119,33 @@ function drawFloorTile(
   cell: number,
   x: number,
   y: number,
+  map: GameMap,
   themeId: LevelThemeId,
 ): void {
-  const h = tileHash(x, y);
+  const h = tileHash(Math.floor(x / 4), Math.floor(y / 4));
   const variant = environmentVariant("floor", x, y, themeId);
   const terrain = TERRAIN_PALETTES[themeId];
   ctx.fillStyle = (h & 1) === 0 ? terrain.floorBase : terrain.floorAlt;
   ctx.fillRect(px, py, cell, cell);
-
-  // Recessed deck seams keep the board readable without looking like a
-  // featureless chess grid.
   ctx.strokeStyle = terrain.floorRim;
   ctx.lineWidth = 1;
   ctx.strokeRect(px + 0.5, py + 0.5, cell - 1, cell - 1);
-  const cx = px + cell / 2;
-  const cy = py + cell / 2;
-  ctx.save();
-  ctx.lineWidth = 1;
 
-  if (variant === "service_hatch" || variant === "access_grid" || variant === "broken_plate") {
-    const inset = cell * 0.19;
-    ctx.fillStyle = "rgba(5,10,14,.24)";
+  const zone = floorTreatmentAt(map.environment, x, y);
+  if (zone) {
+    drawRegionalFloorTreatment(ctx, px, py, cell, x, y, zone, themeId);
+    return;
+  }
+
+  // Ordinary floor is intentionally quiet. Rare recessed maintenance plates
+  // use the theme family without adding isolated lights or barrier-like rails.
+  if (variant === "service_hatch" || variant === "access_grid" || variant === "broken_plate" || variant === "maintenance_grate") {
+    const inset = cell * 0.24;
+    ctx.fillStyle = "rgba(3,8,12,.18)";
     ctx.fillRect(px + inset, py + inset, cell - inset * 2, cell - inset * 2);
-    ctx.strokeStyle = terrain.floorGlyph;
-    ctx.strokeRect(px + inset + 0.5, py + inset + 0.5, cell - inset * 2 - 1, cell - inset * 2 - 1);
-    const bracket = cell * 0.09;
-    ctx.beginPath();
-    ctx.moveTo(cx - bracket, cy);
-    ctx.lineTo(cx + bracket, cy);
-    ctx.moveTo(cx, cy - bracket);
-    ctx.lineTo(cx, cy + bracket);
-    ctx.stroke();
-    if (variant === "broken_plate") {
-      ctx.strokeStyle = terrain.floorWear;
-      ctx.beginPath();
-      ctx.moveTo(px + inset, py + cell * 0.35);
-      ctx.lineTo(cx, cy);
-      ctx.lineTo(px + cell - inset, py + cell * 0.68);
-      ctx.stroke();
-    }
-  } else if (variant === "vent" || variant === "maintenance_grate") {
-    const ventW = cell * 0.44;
-    const ventH = cell * 0.32;
-    ctx.fillStyle = "rgba(3,7,10,.46)";
-    ctx.fillRect(cx - ventW / 2, cy - ventH / 2, ventW, ventH);
     ctx.strokeStyle = terrain.floorSeam;
-    ctx.strokeRect(cx - ventW / 2 + 0.5, cy - ventH / 2 + 0.5, ventW - 1, ventH - 1);
-    for (let i = -2; i <= 2; i++) {
-      const vx = cx + i * ventW * 0.16;
-      ctx.beginPath();
-      ctx.moveTo(vx, cy - ventH * 0.32);
-      ctx.lineTo(vx, cy + ventH * 0.32);
-      ctx.stroke();
-    }
-  } else if (variant === "conduit" || variant === "illuminated_strip" || variant === "exposed_conduit") {
-    const vertical = (h & 2) !== 0;
-    const offset = cell * 0.13;
-    ctx.strokeStyle = variant === "illuminated_strip" ? terrain.floorLight : terrain.floorGlyph;
-    ctx.lineWidth = Math.max(1, cell * 0.045);
-    ctx.beginPath();
-    if (vertical) {
-      ctx.moveTo(cx - offset, py);
-      ctx.lineTo(cx - offset, py + cell);
-      ctx.moveTo(cx + offset, py);
-      ctx.lineTo(cx + offset, py + cell);
-    } else {
-      ctx.moveTo(px, cy - offset);
-      ctx.lineTo(px + cell, cy - offset);
-      ctx.moveTo(px, cy + offset);
-      ctx.lineTo(px + cell, cy + offset);
-    }
-    ctx.stroke();
-  } else {
-    // Sparse wear and fasteners make repeated deck plates feel manufactured.
-    ctx.fillStyle = terrain.floorSeam;
-    const rivet = Math.max(1, cell * 0.024);
-    for (const [rx, ry] of [[0.14, 0.14], [0.86, 0.86]]) {
-      ctx.fillRect(px + cell * rx - rivet / 2, py + cell * ry - rivet / 2, rivet, rivet);
-    }
-    if ((h & 7) === 3) {
-      ctx.strokeStyle = terrain.floorWear;
-      ctx.beginPath();
-      ctx.moveTo(px + cell * 0.24, py + cell * 0.72);
-      ctx.lineTo(px + cell * 0.42, py + cell * 0.60);
-      ctx.lineTo(px + cell * 0.58, py + cell * 0.66);
-      ctx.stroke();
-    }
+    ctx.strokeRect(px + inset + 0.5, py + inset + 0.5, cell - inset * 2 - 1, cell - inset * 2 - 1);
   }
-
-  if ((h & 0x3f) === 0x20) {
-    ctx.shadowColor = terrain.floorLight;
-    ctx.shadowBlur = cell * 0.16;
-    ctx.fillStyle = terrain.floorLight;
-    ctx.fillRect(px + cell * 0.20, py + cell * 0.82, cell * 0.60, Math.max(1, cell * 0.035));
-  }
-  ctx.restore();
 }
 
 function drawWallTile(
@@ -1122,6 +1168,7 @@ function drawWallTile(
   const lip = Math.max(3, Math.round(cell * 0.12));
   const seam = Math.max(1, Math.round(cell * 0.025));
   const h = tileHash(x, y);
+  const showInteriorDetail = exposedCount >= 2 || h % 11 === 0;
 
   // Walls are rendered as a connected raised mass. Interior tile boundaries
   // recede; only edges facing walkable space receive the strong light/dark
@@ -1190,7 +1237,7 @@ function drawWallTile(
   );
   ctx.clip();
 
-  if (variant === "pipe_bank" || variant === "server_bank" || variant === "pipe_cluster") {
+  if (showInteriorDetail && (variant === "pipe_bank" || variant === "server_bank" || variant === "pipe_cluster")) {
     const vertical = (h & 1) === 0;
     const pipeW = Math.max(2, cell * 0.11);
     for (let i = -1; i <= 1; i++) {
@@ -1215,7 +1262,7 @@ function drawWallTile(
       ctx.fillRect(px + cell * 0.22, py + cell * 0.14, Math.max(1, cell * 0.05), cell * 0.72);
       ctx.fillRect(px + cell * 0.73, py + cell * 0.14, Math.max(1, cell * 0.05), cell * 0.72);
     }
-  } else if (variant === "system_panel" || variant === "security_panel" || variant === "patchwork_wall") {
+  } else if (showInteriorDetail && (variant === "system_panel" || variant === "security_panel" || variant === "patchwork_wall")) {
     const inset = cell * 0.15;
     ctx.fillStyle = terrain.wallMid;
     ctx.fillRect(px + inset, py + inset, cell - inset * 2, cell - inset * 2);
@@ -1234,7 +1281,7 @@ function drawWallTile(
       ctx.lineTo(px + cell * 0.74, py + cell * (0.62 + i * 0.07));
       ctx.stroke();
     }
-  } else {
+  } else if (showInteriorDetail) {
     // Braces follow the wall run so neighboring tiles combine into one piece,
     // rather than repeating the square-with-an-X language of floor hatches.
     ctx.strokeStyle = terrain.wallPanel;
@@ -1278,7 +1325,7 @@ function drawWallTile(
     if (!south && !east) ctx.fillRect(px + cell - lip * 0.58 - bolt, py + cell - lip * 0.58 - bolt, bolt, bolt);
   }
 
-  if ((h & 0x1f) === 0) {
+  if (exposedCount >= 2 && (h & 0x1f) === 0) {
     const dotSize = Math.max(1, Math.floor(cell * 0.07));
     ctx.shadowColor = terrain.wallLight;
     ctx.shadowBlur = cell * 0.16;
@@ -1295,12 +1342,13 @@ function drawHalfCoverTile(
   cell: number,
   x: number,
   y: number,
+  map: GameMap,
   themeId: LevelThemeId,
 ): void {
-  drawFloorTile(ctx, px, py, cell, x, y, themeId);
+  drawFloorTile(ctx, px, py, cell, x, y, map, themeId);
   const variant = environmentVariant("half_cover", x, y, themeId);
   const terrain = TERRAIN_PALETTES[themeId];
-  const inset = Math.max(2, Math.floor(cell * 0.18));
+  const inset = Math.max(2, Math.floor(cell * 0.13));
   const ox = px + inset;
   const oy = py + inset;
   const ow = cell - inset * 2;

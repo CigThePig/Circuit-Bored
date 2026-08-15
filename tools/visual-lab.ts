@@ -3,7 +3,7 @@ import { generatedEncounterDiagnostics } from "../src/generation.ts";
 import { isLevelThemeId } from "../src/themes.ts";
 import { buildGeneratedThemeScene, buildVisualScenes, type VisualScene } from "./visual-scenes.ts";
 
-type ViewMode = "normal" | "grayscale" | "contrast" | "squint";
+type ViewMode = "normal" | "grayscale" | "contrast" | "squint" | "semantic";
 type BackdropMode = "dark" | "light";
 
 const scenes = buildVisualScenes();
@@ -38,7 +38,7 @@ function clampCellSize(value: number): number {
 }
 
 function isViewMode(value: string | null): value is ViewMode {
-  return value === "normal" || value === "grayscale" || value === "contrast" || value === "squint";
+  return value === "normal" || value === "grayscale" || value === "contrast" || value === "squint" || value === "semantic";
 }
 
 function isBackdropMode(value: string | null): value is BackdropMode {
@@ -76,9 +76,11 @@ function syncUrl(): void {
 }
 
 function sceneState(scene: VisualScene): RenderState {
-  if (overlayInput.checked) return scene.state;
+  const diagnostic = viewSelect.value === "semantic";
+  if (overlayInput.checked) return { ...scene.state, terrainDiagnostic: diagnostic };
   return {
     ...scene.state,
+    terrainDiagnostic: diagnostic,
     selected: null,
     showUnitUi: false,
     highlights: [],
@@ -146,6 +148,7 @@ function filterForView(): string {
   if (viewSelect.value === "grayscale") return `${PRODUCTION_CANVAS_FILTER} grayscale(1)`;
   if (viewSelect.value === "contrast") return `${PRODUCTION_CANVAS_FILTER} grayscale(1) contrast(1.85)`;
   if (viewSelect.value === "squint") return `${PRODUCTION_CANVAS_FILTER} grayscale(1) contrast(1.3) blur(3px)`;
+  if (viewSelect.value === "semantic") return "none";
   return PRODUCTION_CANVAS_FILTER;
 }
 
@@ -247,7 +250,10 @@ function buildSceneCard(scene: VisualScene, index: number): void {
     const copy = document.createElement("div");
     const kicker = document.createElement("div");
     kicker.className = "scene-kicker";
-    kicker.textContent = `Scene ${index + 1} · ${scene.state.map.width}×${scene.state.map.height}`;
+    const diagnostics = generatedEncounterDiagnostics(scene.state.map);
+    const budget = diagnostics?.featureBudget;
+    kicker.textContent = `Scene ${index + 1} · ${scene.state.map.width}×${scene.state.map.height}` +
+      (budget ? ` · budget ${budget.major}/${budget.secondary}/${budget.minor}` : "");
     const title = document.createElement("h2");
     title.textContent = scene.title;
     const description = document.createElement("p");

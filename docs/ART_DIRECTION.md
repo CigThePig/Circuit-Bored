@@ -42,7 +42,29 @@ Lower levels must never obscure higher levels.
 - 56 px: detail and shape inspection.
 
 Review the terrain contact sheet, unit lineup, overlay matrix, and generated
-encounter at all three sizes before approving a renderer change.
+landmark-heavy and quiet encounter examples at all three sizes before approving
+a renderer change. Use Semantic categories to separate generation hierarchy
+problems from decorative-art problems.
+
+## Macro identity and restraint
+
+- A generated encounter should be describable by two to four named places. One
+  or two major landmarks carry the map silhouette; secondary structures support
+  them; the remaining board is allowed to stay calm.
+- Ordinary floor never uses isolated glowing rails, conduits, or strips. A
+  brighter floor treatment must belong to a generated multi-tile region such as
+  a service lane, checkpoint threshold, loading apron, or server hall.
+- Regional treatment follows the room or landmark footprint. It must not make
+  every enclosed tile equally detailed, and at least half of usable floor should
+  remain untreated background in generated encounters.
+- Long wall runs read as a single mass. Pipes, panels, brackets, and lights are
+  reserved for exposed corners, entrances, and sparse structural intervals.
+- Cover is a physical tactical object, not floor decoration: preserve its raised
+  silhouette and cluster it around landmark edges, crossings, and defensive
+  pockets.
+- Quiet space is intentional negative space, not unfinished art. Units,
+  highlights, projectile effects, and the landmark silhouette should become
+  easier to parse because ordinary terrain recedes.
 
 ## Environment families
 

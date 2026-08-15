@@ -267,11 +267,15 @@ function effectsScene(): VisualScene {
   };
 }
 
-export function buildGeneratedThemeScene(themeId: LevelThemeId, seed: string): VisualScene {
+export function buildGeneratedThemeScene(
+  themeId: LevelThemeId,
+  seed: string,
+  profile: "landmark" | "quiet" = "landmark",
+): VisualScene {
   const map = generateEncounter(
     new SeededRng(seed),
-    4,
-    "elite",
+    profile === "landmark" ? 5 : 1,
+    profile === "landmark" ? "final" : "combat",
     [
       { id: "lab-rook", name: "Rook", archetypeId: "operator", hp: 9, maxHp: 9, baseMaxAp: 4 },
       { id: "lab-vex", name: "Vex", archetypeId: "runner", hp: 5, maxHp: 7, baseMaxAp: 5 },
@@ -282,12 +286,15 @@ export function buildGeneratedThemeScene(themeId: LevelThemeId, seed: string): V
   );
   const state = emptyState(map);
   state.selected = map.units.find((unit) => unit.team === "player") ?? null;
+  const landmarkNames = map.environment?.landmarks.map(({ name }) => name).join(", ") ?? "legacy map";
 
   return {
-    id: `generated-${themeId.replace("_", "-")}`,
-    title: `${LEVEL_THEMES[themeId].shortName} generated encounter`,
-    description: `Real generator and renderer output for fixed seed ${seed}. ${LEVEL_THEMES[themeId].tacticalCharacter}`,
-    review: "Read the environment from geometry in grayscale, then confirm themed floor, wall, and cover art remains subordinate to units.",
+    id: `generated-${themeId.replace("_", "-")}-${profile}`,
+    title: `${LEVEL_THEMES[themeId].shortName} · ${profile === "landmark" ? "landmark-heavy" : "quiet"}`,
+    description: `Fixed seed ${seed}. Named places: ${landmarkNames}. ${LEVEL_THEMES[themeId].tacticalCharacter}`,
+    review: profile === "landmark"
+      ? "Identify the major places from geometry in grayscale and confirm that each landmark shapes routes, sight, or cover."
+      : "Confirm broad ordinary floor stays calm, unmistakably walkable, and subordinate to the limited feature budget.",
     state,
   };
 }
@@ -298,8 +305,11 @@ export function buildVisualScenes(): VisualScene[] {
     unitScene(),
     overlayScene(),
     effectsScene(),
-    buildGeneratedThemeScene("industrial", "FOUNDRY-LANES-41"),
-    buildGeneratedThemeScene("data_core", "DATA-CORE-ROOMS-17"),
-    buildGeneratedThemeScene("derelict", "SALVAGE-BREACH-29"),
+    buildGeneratedThemeScene("industrial", "FOUNDRY-LANDMARK-41", "landmark"),
+    buildGeneratedThemeScene("industrial", "FOUNDRY-QUIET-12", "quiet"),
+    buildGeneratedThemeScene("data_core", "DATA-VAULT-17", "landmark"),
+    buildGeneratedThemeScene("data_core", "DATA-QUIET-08", "quiet"),
+    buildGeneratedThemeScene("derelict", "SALVAGE-LANDMARK-29", "landmark"),
+    buildGeneratedThemeScene("derelict", "SALVAGE-QUIET-06", "quiet"),
   ];
 }

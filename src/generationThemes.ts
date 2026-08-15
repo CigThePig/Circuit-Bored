@@ -1,26 +1,36 @@
-import { getTile, setTile, type GameMap } from "./map.ts";
-import { SeededRng } from "./rng.ts";
-import type { LevelThemeId } from "./themes.ts";
+import type { FeatureBudget, FloorTreatmentZone, MapLandmark, MapRect } from "./environment.ts";
 import {
-  paintBrokenRoom,
+  paintBreachedCorridor,
+  paintCollapsedRoom,
+  paintCoolantTanks,
+  paintDataCore,
+  paintFurnaceBlock,
+  paintLoadingBay,
+  paintProcessingLine,
+  paintScrapHeap,
+  paintSecurityCheckpoint,
+  paintServerRows,
+  paintServerVault,
+  paintWreckedMachinery,
+  type LandmarkPlacement,
+} from "./generationLandmarks.ts";
+import {
   paintCoverCluster,
-  paintMachineryIsland,
-  paintRect,
-  paintRoomBoundary,
-  paintUDefense,
   paintWallRun,
-  paintZigZagDivider,
   pointsInRect,
   type MotifId,
   type Point,
   type Rect,
 } from "./generationMotifs.ts";
+import { getTile, type GameMap } from "./map.ts";
+import { SeededRng } from "./rng.ts";
+import type { LevelThemeId } from "./themes.ts";
 
 export type LayoutEncounterKind = "combat" | "elite" | "final";
 
 export type MacroZone = {
   id: string;
-  purpose: "spawn" | "lane" | "room" | "connector" | "contested" | "flank";
+  purpose: "spawn" | "lane" | "room" | "connector" | "contested" | "flank" | "landmark";
   rect: Rect;
 };
 
@@ -30,34 +40,31 @@ export type ThemeLayout = {
   contestedPoints: Point[];
   zones: MacroZone[];
   motifs: MotifId[];
+  landmarks: MapLandmark[];
+  floorZones: FloorTreatmentZone[];
+  featureBudget: FeatureBudget;
+};
+
+type LayoutParts = {
+  landmarks: MapLandmark[];
+  floorZones: FloorTreatmentZone[];
+  motifs: MotifId[];
 };
 
 function choose<T>(rng: SeededRng, items: readonly T[]): T {
   return items[rng.int(0, items.length)];
 }
 
-function addFinalLandmark(map: GameMap, themeId: LevelThemeId, motifs: MotifId[]): void {
-  motifs.push("central_landmark");
-  if (themeId === "industrial") {
-    paintRect(map, { x: 10, y: 9, width: 4, height: 6 }, "floor");
-    paintMachineryIsland(map, { x: 10, y: 10, width: 4, height: 4 }, "e");
-    paintCoverCluster(map, { x: 8, y: 10 }, "pair");
-    paintCoverCluster(map, { x: 15, y: 12 }, "pair", 2);
-  } else if (themeId === "data_core") {
-    paintRect(map, { x: 9, y: 8, width: 6, height: 8 }, "floor");
-    paintRoomBoundary(map, { x: 9, y: 8, width: 6, height: 8 }, [
-      { x: 11, y: 8 }, { x: 12, y: 8 },
-      { x: 11, y: 15 }, { x: 12, y: 15 },
-      { x: 9, y: 11 }, { x: 14, y: 12 },
-    ]);
-    paintRect(map, { x: 11, y: 10, width: 2, height: 4 }, "wall");
-  } else {
-    paintRect(map, { x: 8, y: 8, width: 8, height: 8 }, "floor");
-    paintUDefense(map, { x: 9, y: 9 }, 6, 6, "s");
-    setTile(map, 9, 11, "floor");
-    setTile(map, 14, 13, "floor");
-    paintCoverCluster(map, { x: 10, y: 7 }, "stagger");
-  }
+function featureBudget(depth: number, kind: LayoutEncounterKind): FeatureBudget {
+  if (kind === "final") return { major: 2, secondary: 2, minor: 2 };
+  if (kind === "elite" || depth >= 3) return { major: 2, secondary: 1, minor: 2 };
+  return { major: 1, secondary: 1, minor: 2 };
+}
+
+function addPlacement(parts: LayoutParts, placement: LandmarkPlacement): void {
+  parts.landmarks.push(placement.landmark);
+  parts.floorZones.push(placement.floorZone);
+  parts.motifs.push(placement.landmark.kind);
 }
 
 function industrialLayout(
@@ -66,48 +73,60 @@ function industrialLayout(
   depth: number,
   kind: LayoutEncounterKind,
 ): ThemeLayout {
-  const motifs: MotifId[] = ["wall_with_breaches", "machinery_island", "loading_zone"];
-  const upperDivider = choose(rng, [7, 8] as const);
-  const lowerDivider = choose(rng, [15, 16] as const);
-  const firstBreaches = rng.shuffle([3, 7, 12, 16]).slice(0, 2).sort((a, b) => a - b);
-  const secondBreaches = rng.shuffle([2, 8, 13, 17]).slice(0, 2).sort((a, b) => a - b);
-  paintWallRun(map, { x: 2, y: upperDivider }, 20, true, firstBreaches, 2);
-  paintWallRun(map, { x: 2, y: lowerDivider }, 20, true, secondBreaches, 2);
+  const budget = featureBudget(depth, kind);
+  const parts: LayoutParts = { landmarks: [], floorZones: [], motifs: [] };
+  const primaryRect = choose(rng, [
+    { x: 8, y: 8, width: 7, height: 7 },
+    { x: 9, y: 7, width: 7, height: 8 },
+    { x: 8, y: 9, width: 8, height: 7 },
+  ] as const);
+  addPlacement(parts, rng.next() < 0.55
+    ? paintFurnaceBlock(map, primaryRect)
+    : paintCoolantTanks(map, primaryRect));
 
-  const islands: Array<{ rect: Rect; side: "n" | "s" | "e" | "w" }> = [
-    { rect: { x: choose(rng, [6, 7]), y: 2, width: 3, height: 3 }, side: "s" },
-    { rect: { x: choose(rng, [12, 13]), y: upperDivider + 2, width: 3, height: 3 }, side: "w" },
-    { rect: { x: choose(rng, [7, 8]), y: lowerDivider + 2, width: 4, height: 2 }, side: "n" },
-  ];
-  if (depth >= 3 || kind !== "combat") {
-    motifs.push("paired_machinery");
-    islands.push({ rect: { x: 16, y: upperDivider + 3, width: 2, height: 3 }, side: "e" });
+  const loadingY = choose(rng, [15, 16] as const);
+  const loadingRect = rng.next() < 0.5
+    ? { x: 2, y: loadingY, width: 8, height: 6 }
+    : { x: 14, y: loadingY, width: 8, height: 6 };
+  addPlacement(parts, paintLoadingBay(map, loadingRect));
+
+  if (budget.major > 1) {
+    addPlacement(parts, paintProcessingLine(map, { x: 3, y: 3, width: 18, height: 5 }));
+  } else {
+    parts.motifs.push("wall_with_breaches");
+    paintWallRun(map, { x: 3, y: 5 }, 18, true, [5, 13], 2);
   }
-  for (const island of islands) paintMachineryIsland(map, island.rect, island.side);
 
-  paintCoverCluster(map, { x: 4, y: upperDivider + 3 }, "stagger", rng.int(0, 4));
-  paintCoverCluster(map, { x: 17, y: lowerDivider - 3 }, "corner", rng.int(0, 4));
-  paintCoverCluster(map, { x: 10, y: lowerDivider + 3 }, "pair", rng.int(0, 4));
-  if (kind !== "combat") {
-    motifs.push("offset_bulkhead");
-    paintWallRun(map, { x: 5, y: 11 }, 6, true, [2], 2);
-    paintCoverCluster(map, { x: 5, y: 12 }, "pair", 3);
+  if (budget.secondary > 1) {
+    const secondary = primaryRect.x < 9
+      ? { x: 17, y: 8, width: 5, height: 6 }
+      : { x: 2, y: 8, width: 5, height: 6 };
+    addPlacement(parts, paintLoadingBay(map, secondary, "service-dock", "Service Dock"));
   }
-  if (kind === "final") addFinalLandmark(map, "industrial", motifs);
 
+  paintCoverCluster(map, { x: 4, y: 12 }, "stagger", rng.int(0, 4));
+  paintCoverCluster(map, { x: 17, y: 13 }, "corner", rng.int(0, 4));
+  parts.motifs.push("machinery_island", "offset_bulkhead");
+
+  const playerRect: Rect = { x: 2, y: 2, width: 5, height: 4 };
+  const enemyRect: Rect = { x: 18, y: 18, width: 4, height: 4 };
   const zones: MacroZone[] = [
-    { id: "player-pocket", purpose: "spawn", rect: { x: 2, y: 2, width: 4, height: Math.max(4, upperDivider - 3) } },
-    { id: "upper-work-lane", purpose: "lane", rect: { x: 6, y: 1, width: 16, height: upperDivider - 1 } },
-    { id: "processing-lane", purpose: "contested", rect: { x: 2, y: upperDivider + 1, width: 20, height: lowerDivider - upperDivider - 1 } },
-    { id: "lower-flank", purpose: "flank", rect: { x: 2, y: lowerDivider + 1, width: 16, height: 22 - lowerDivider } },
-    { id: "enemy-loading", purpose: "spawn", rect: { x: 18, y: lowerDivider + 1, width: 4, height: 22 - lowerDivider } },
+    { id: "player-service-pocket", purpose: "spawn", rect: playerRect },
+    { id: "upper-work-lane", purpose: "lane", rect: { x: 2, y: 2, width: 20, height: 6 } },
+    { id: "processing-floor", purpose: "contested", rect: { x: 6, y: 7, width: 12, height: 10 } },
+    { id: "side-service-route", purpose: "flank", rect: { x: 2, y: 8, width: 5, height: 11 } },
+    { id: "loading-approach", purpose: "landmark", rect: loadingRect },
+    { id: "enemy-staging", purpose: "spawn", rect: enemyRect },
   ];
   return {
-    playerCandidates: pointsInRect(zones[0].rect),
-    enemyCandidates: pointsInRect(zones[4].rect),
+    playerCandidates: pointsInRect(playerRect),
+    enemyCandidates: pointsInRect(enemyRect),
     contestedPoints: pointsInRect(zones[2].rect),
     zones,
-    motifs,
+    motifs: parts.motifs,
+    landmarks: parts.landmarks,
+    floorZones: parts.floorZones,
+    featureBudget: budget,
   };
 }
 
@@ -117,54 +136,53 @@ function dataCoreLayout(
   depth: number,
   kind: LayoutEncounterKind,
 ): ThemeLayout {
-  const motifs: MotifId[] = ["small_chamber", "cross_corridor", "defensive_checkpoint"];
-  const leftPartition = choose(rng, [7, 8]);
-  const rightPartition = choose(rng, [15, 16]);
-  const crossPartition = choose(rng, [11, 12]);
-  const leftDoors = rng.shuffle([3, 8, 16, 19]).slice(0, 3).sort((a, b) => a - b);
-  const rightDoors = rng.shuffle([4, 9, 15, 19]).slice(0, 3).sort((a, b) => a - b);
-  paintWallRun(map, { x: leftPartition, y: 1 }, 22, false, leftDoors, 2);
-  paintWallRun(map, { x: rightPartition, y: 1 }, 22, false, rightDoors, 2);
-  const crossDoors = [
-    choose(rng, [2, 3]),
-    choose(rng, [leftPartition + 2, leftPartition + 4]),
-    choose(rng, [rightPartition + 2, rightPartition + 4]),
-  ];
-  paintWallRun(map, { x: 1, y: crossPartition }, 22, true, crossDoors, 2);
+  const budget = featureBudget(depth, kind);
+  const parts: LayoutParts = { landmarks: [], floorZones: [], motifs: [] };
+  const vaultRect = choose(rng, [
+    { x: 8, y: 7, width: 8, height: 10 },
+    { x: 9, y: 7, width: 7, height: 10 },
+    { x: 8, y: 8, width: 9, height: 8 },
+  ] as const);
+  addPlacement(parts, rng.next() < 0.6
+    ? paintServerVault(map, vaultRect)
+    : paintDataCore(map, vaultRect));
 
-  // Repeated room-edge equipment creates ordered defensive positions without
-  // filling the deliberately exposed corridor crossings.
-  paintCoverCluster(map, { x: 3, y: 4 }, "corner", 0);
-  paintCoverCluster(map, { x: leftPartition + 3, y: 3 }, "pair", 0);
-  paintCoverCluster(map, { x: rightPartition + 3, y: 7 }, "pair", 2);
-  paintCoverCluster(map, { x: 3, y: crossPartition + 4 }, "pair", 1);
-  paintCoverCluster(map, { x: leftPartition + 4, y: crossPartition + 5 }, "corner", 2);
-  paintCoverCluster(map, { x: rightPartition + 3, y: crossPartition + 4 }, "pair", 3);
+  const checkpointRect = rng.next() < 0.5
+    ? { x: 2, y: 15, width: 9, height: 4 }
+    : { x: 13, y: 4, width: 9, height: 4 };
+  addPlacement(parts, paintSecurityCheckpoint(map, checkpointRect));
 
-  if (depth >= 2) {
-    motifs.push("t_junction");
-    paintWallRun(map, { x: leftPartition + 3, y: 6 }, rightPartition - leftPartition - 5, true, [2], 2);
+  if (budget.major > 1) {
+    const coreRect = vaultRect.x < 9
+      ? { x: 17, y: 14, width: 5, height: 7 }
+      : { x: 2, y: 3, width: 6, height: 7 };
+    addPlacement(parts, paintDataCore(map, coreRect, "auxiliary-core"));
   }
-  if (kind !== "combat") {
-    motifs.push("large_chamber");
-    paintWallRun(map, { x: 10, y: crossPartition + 3 }, 6, false, [2], 2);
-    paintCoverCluster(map, { x: 11, y: crossPartition + 5 }, "pocket", 1);
+  if (budget.secondary > 1) {
+    const rowsRect = checkpointRect.x < 10
+      ? { x: 17, y: 3, width: 5, height: 10 }
+      : { x: 2, y: 9, width: 5, height: 10 };
+    addPlacement(parts, paintServerRows(map, rowsRect));
   }
-  if (kind === "final") addFinalLandmark(map, "data_core", motifs);
+
+  paintCoverCluster(map, { x: 4, y: 7 }, "pair", rng.int(0, 4));
+  paintCoverCluster(map, { x: 18, y: 16 }, "corner", rng.int(0, 4));
+  paintCoverCluster(map, { x: 11, y: 19 }, "pair", rng.int(0, 4));
+  parts.motifs.push("small_chamber", "cross_corridor");
 
   const playerTop = rng.next() < 0.5;
   const playerRect: Rect = playerTop
-    ? { x: 2, y: 2, width: leftPartition - 3, height: 7 }
-    : { x: 2, y: crossPartition + 2, width: leftPartition - 3, height: 8 };
+    ? { x: 2, y: 2, width: 5, height: 4 }
+    : { x: 2, y: 18, width: 5, height: 4 };
   const enemyRect: Rect = playerTop
-    ? { x: rightPartition + 2, y: crossPartition + 2, width: 21 - rightPartition, height: 8 }
-    : { x: rightPartition + 2, y: 2, width: 21 - rightPartition, height: 7 };
+    ? { x: 18, y: 18, width: 4, height: 4 }
+    : { x: 18, y: 2, width: 4, height: 4 };
   const zones: MacroZone[] = [
     { id: "player-room", purpose: "spawn", rect: playerRect },
-    { id: "north-rooms", purpose: "room", rect: { x: leftPartition + 1, y: 1, width: rightPartition - leftPartition - 1, height: crossPartition - 1 } },
-    { id: "cross-corridor", purpose: "connector", rect: { x: 1, y: crossPartition - 1, width: 22, height: 3 } },
-    { id: "core-chamber", purpose: "contested", rect: { x: leftPartition + 1, y: crossPartition + 1, width: rightPartition - leftPartition - 1, height: 21 - crossPartition } },
-    { id: "south-flank", purpose: "flank", rect: { x: 2, y: crossPartition + 1, width: leftPartition - 2, height: 21 - crossPartition } },
+    { id: "west-rooms", purpose: "room", rect: { x: 2, y: 6, width: 6, height: 11 } },
+    { id: "vault-chamber", purpose: "landmark", rect: vaultRect },
+    { id: "controlled-crossing", purpose: "contested", rect: { x: 7, y: 5, width: 11, height: 14 } },
+    { id: "east-service-route", purpose: "flank", rect: { x: 17, y: 7, width: 5, height: 10 } },
     { id: "enemy-room", purpose: "spawn", rect: enemyRect },
   ];
   return {
@@ -172,7 +190,10 @@ function dataCoreLayout(
     enemyCandidates: pointsInRect(enemyRect),
     contestedPoints: pointsInRect(zones[3].rect),
     zones,
-    motifs,
+    motifs: parts.motifs,
+    landmarks: parts.landmarks,
+    floorZones: parts.floorZones,
+    featureBudget: budget,
   };
 }
 
@@ -182,45 +203,59 @@ function derelictLayout(
   depth: number,
   kind: LayoutEncounterKind,
 ): ThemeLayout {
-  const motifs: MotifId[] = ["broken_room", "zig_zag_divider", "u_defense", "salvage_cluster"];
-  paintBrokenRoom(map, { x: 3, y: 2, width: 7, height: 7 }, choose(rng, ["s", "e"] as const));
-  paintBrokenRoom(map, { x: 15, y: 15, width: 6, height: 7 }, choose(rng, ["n", "w"] as const));
-  paintUDefense(map, { x: 11, y: 3 }, 5, 5, choose(rng, ["n", "s"] as const));
-  paintZigZagDivider(map, { x: 7, y: 10 }, 6, 3, 2);
-  paintWallRun(map, { x: 3, y: 12 }, 6, true, [2], 2);
-  paintWallRun(map, { x: 18, y: 6 }, 6, false, [2], 2);
-  motifs.push("offset_bulkhead", "l_room");
+  const budget = featureBudget(depth, kind);
+  const parts: LayoutParts = { landmarks: [], floorZones: [], motifs: [] };
+  const collapsedRect = choose(rng, [
+    { x: 3, y: 3, width: 8, height: 8 },
+    { x: 4, y: 2, width: 9, height: 8 },
+    { x: 2, y: 5, width: 9, height: 7 },
+  ] as const);
+  addPlacement(parts, paintCollapsedRoom(map, collapsedRect));
 
-  const clusters: Array<{ point: Point; pattern: "pair" | "stagger" | "corner" | "pocket" }> = [
-    { point: { x: 4, y: 9 }, pattern: "stagger" },
-    { point: { x: 11, y: 10 }, pattern: "pocket" },
-    { point: { x: 16, y: 4 }, pattern: "corner" },
-    { point: { x: 5, y: 17 }, pattern: "stagger" },
-    { point: { x: 18, y: 13 }, pattern: "pair" },
-    { point: { x: 12, y: 19 }, pattern: "corner" },
-  ];
-  for (const cluster of clusters) paintCoverCluster(map, cluster.point, cluster.pattern, rng.int(0, 4));
-  if (depth >= 3 || kind !== "combat") {
-    paintBrokenRoom(map, { x: 2, y: 15, width: 7, height: 6 }, "e");
-    paintCoverCluster(map, { x: 9, y: 15 }, "pocket", rng.int(0, 4));
+  const wreckRect = choose(rng, [
+    { x: 13, y: 12, width: 8, height: 6 },
+    { x: 14, y: 10, width: 7, height: 7 },
+  ] as const);
+  addPlacement(parts, rng.next() < 0.55
+    ? paintWreckedMachinery(map, wreckRect)
+    : paintBreachedCorridor(map, wreckRect));
+
+  if (budget.major > 1) {
+    const scrapRect = choose(rng, [
+      { x: 14, y: 3, width: 7, height: 7 },
+      { x: 13, y: 3, width: 7, height: 7 },
+      { x: 14, y: 4, width: 7, height: 7 },
+    ] as const);
+    addPlacement(parts, paintScrapHeap(map, scrapRect));
   }
-  if (kind === "final") addFinalLandmark(map, "derelict", motifs);
+  if (budget.secondary > 1) {
+    addPlacement(parts, paintWreckedMachinery(map, { x: 3, y: 14, width: 7, height: 6 }, "salvage-crane", "Salvage Crane"));
+  }
 
-  const playerRect: Rect = { x: 2, y: 14, width: 5, height: 8 };
-  const enemyRect: Rect = { x: 18, y: 2, width: 4, height: 7 };
+  paintWallRun(map, { x: 8, y: 11 }, 8, true, [3], 2);
+  paintCoverCluster(map, { x: 7, y: 10 }, "corner", 0);
+  paintCoverCluster(map, { x: 15, y: 18 }, "pocket", 0);
+  parts.motifs.push("offset_bulkhead", "salvage_cluster");
+
+  const playerRect: Rect = { x: 2, y: 18, width: 5, height: 4 };
+  const enemyRect: Rect = { x: 18, y: 2, width: 4, height: 4 };
   const zones: MacroZone[] = [
-    { id: "player-salvage-pocket", purpose: "spawn", rect: playerRect },
-    { id: "broken-workshop", purpose: "room", rect: { x: 2, y: 2, width: 9, height: 8 } },
-    { id: "crooked-crossing", purpose: "contested", rect: { x: 7, y: 9, width: 10, height: 8 } },
-    { id: "maintenance-flank", purpose: "flank", rect: { x: 9, y: 16, width: 12, height: 6 } },
-    { id: "enemy-scrap-fort", purpose: "spawn", rect: enemyRect },
+    { id: "player-maintenance-pocket", purpose: "spawn", rect: playerRect },
+    { id: "collapsed-bay", purpose: "landmark", rect: collapsedRect },
+    { id: "broken-crossing", purpose: "contested", rect: { x: 7, y: 8, width: 11, height: 10 } },
+    { id: "maintenance-spine", purpose: "connector", rect: { x: 2, y: 11, width: 20, height: 4 } },
+    { id: "outer-salvage-route", purpose: "flank", rect: { x: 12, y: 2, width: 10, height: 8 } },
+    { id: "enemy-scrap-pocket", purpose: "spawn", rect: enemyRect },
   ];
   return {
     playerCandidates: pointsInRect(playerRect),
     enemyCandidates: pointsInRect(enemyRect),
     contestedPoints: pointsInRect(zones[2].rect),
     zones,
-    motifs,
+    motifs: parts.motifs,
+    landmarks: parts.landmarks,
+    floorZones: parts.floorZones,
+    featureBudget: budget,
   };
 }
 
@@ -231,6 +266,20 @@ function transformPoint(point: Point, size: number, rotations: number, mirror: b
   }
   if (mirror) transformed.x = size - 1 - transformed.x;
   return transformed;
+}
+
+function transformRect(rect: MapRect, size: number, rotations: number, mirror: boolean): MapRect {
+  const corners = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width - 1, y: rect.y },
+    { x: rect.x, y: rect.y + rect.height - 1 },
+    { x: rect.x + rect.width - 1, y: rect.y + rect.height - 1 },
+  ].map((point) => transformPoint(point, size, rotations, mirror));
+  const minX = Math.min(...corners.map(({ x }) => x));
+  const maxX = Math.max(...corners.map(({ x }) => x));
+  const minY = Math.min(...corners.map(({ y }) => y));
+  const maxY = Math.max(...corners.map(({ y }) => y));
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
 function transformLayout(map: GameMap, layout: ThemeLayout, rotations: number, mirror: boolean): ThemeLayout {
@@ -248,6 +297,9 @@ function transformLayout(map: GameMap, layout: ThemeLayout, rotations: number, m
     playerCandidates: transformPoints(layout.playerCandidates),
     enemyCandidates: transformPoints(layout.enemyCandidates),
     contestedPoints: transformPoints(layout.contestedPoints),
+    zones: layout.zones.map((zone) => ({ ...zone, rect: transformRect(zone.rect, map.width, rotations, mirror) })),
+    landmarks: layout.landmarks.map((item) => ({ ...item, rect: transformRect(item.rect, map.width, rotations, mirror) })),
+    floorZones: layout.floorZones.map((zone) => ({ ...zone, rect: transformRect(zone.rect, map.width, rotations, mirror) })),
   };
 }
 
@@ -266,9 +318,13 @@ export function buildThemeLayout(
   const rotations = rng.int(0, 4);
   const mirror = rng.next() < 0.5;
   layout = transformLayout(map, layout, rotations, mirror);
-  // Remove transformed candidates that no longer describe walkable space.
   layout.playerCandidates = layout.playerCandidates.filter(({ x, y }) => getTile(map, x, y) === "floor");
   layout.enemyCandidates = layout.enemyCandidates.filter(({ x, y }) => getTile(map, x, y) === "floor");
   layout.contestedPoints = layout.contestedPoints.filter(({ x, y }) => getTile(map, x, y) === "floor");
+  map.environment = {
+    featureBudget: { ...layout.featureBudget },
+    landmarks: layout.landmarks.map((item) => ({ ...item, rect: { ...item.rect } })),
+    floorZones: layout.floorZones.map((zone) => ({ ...zone, rect: { ...zone.rect } })),
+  };
   return layout;
 }

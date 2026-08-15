@@ -1,6 +1,14 @@
 import type { GameMap, TileType, Unit } from "./map.ts";
 import { UNIT_AP, UNIT_HP, generateUnitId } from "./map.ts";
 import { DEFAULT_LEVEL_THEME_ID, isLevelThemeId } from "./themes.ts";
+import {
+  isFloorTreatmentId,
+  isLandmarkKind,
+  type FloorTreatmentZone,
+  type MapEnvironment,
+  type MapLandmark,
+  type MapRect,
+} from "./environment.ts";
 
 export type ValidationSeverity = "error" | "warning" | "notice" | "info";
 
@@ -30,6 +38,8 @@ const VALID_TEAMS: ReadonlySet<Unit["team"]> = new Set<Unit["team"]>([
 
 export const MAX_MAP_DIMENSION = 128;
 export const MAX_MAP_CELLS = 16_384;
+const MAX_LANDMARKS = 4;
+const MAX_FLOOR_ZONES = 8;
 
 function isFiniteNonNegativeInt(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && Number.isInteger(n) && n >= 0;
@@ -51,6 +61,55 @@ function pushWarning(
   extras?: Partial<ValidationIssue>,
 ): void {
   issues.push({ severity: "warning", code, message, ...extras });
+}
+
+function validRect(rect: unknown, width: number, height: number): rect is MapRect {
+  if (!rect || typeof rect !== "object" || Array.isArray(rect)) return false;
+  const value = rect as Partial<MapRect>;
+  return isFiniteNonNegativeInt(value.x) && isFiniteNonNegativeInt(value.y) &&
+    isFiniteNonNegativeInt(value.width) && value.width > 0 &&
+    isFiniteNonNegativeInt(value.height) && value.height > 0 &&
+    value.x + value.width <= width && value.y + value.height <= height;
+}
+
+function validateEnvironment(environment: unknown, width: number, height: number, issues: ValidationIssue[]): void {
+  if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+    pushError(issues, "INVALID_ENVIRONMENT", "Map environment metadata must be an object.");
+    return;
+  }
+  const value = environment as Partial<MapEnvironment>;
+  if (!value.featureBudget || !isFiniteNonNegativeInt(value.featureBudget.major) ||
+      !isFiniteNonNegativeInt(value.featureBudget.secondary) || !isFiniteNonNegativeInt(value.featureBudget.minor) ||
+      value.featureBudget.major > MAX_LANDMARKS || value.featureBudget.secondary > MAX_LANDMARKS || value.featureBudget.minor > 8) {
+    pushError(issues, "INVALID_FEATURE_BUDGET", "Map feature budget must contain non-negative integer counts.");
+  }
+  if (!Array.isArray(value.landmarks) || value.landmarks.length > MAX_LANDMARKS) {
+    pushError(issues, "INVALID_LANDMARKS", `Map environment may contain at most ${MAX_LANDMARKS} landmarks.`);
+  } else {
+    const ids = new Set<string>();
+    for (const item of value.landmarks) {
+      if (!item || typeof item !== "object" || typeof item.id !== "string" || item.id.length === 0 || ids.has(item.id) ||
+          typeof item.name !== "string" || item.name.length === 0 || !isLandmarkKind(item.kind) ||
+          (item.importance !== "major" && item.importance !== "secondary") || !validRect(item.rect, width, height)) {
+        pushError(issues, "INVALID_LANDMARK", "Map contains malformed, duplicate, or out-of-bounds landmark metadata.");
+        break;
+      }
+      ids.add(item.id);
+    }
+  }
+  if (!Array.isArray(value.floorZones) || value.floorZones.length > MAX_FLOOR_ZONES) {
+    pushError(issues, "INVALID_FLOOR_ZONES", `Map environment may contain at most ${MAX_FLOOR_ZONES} floor zones.`);
+  } else {
+    const ids = new Set<string>();
+    for (const zone of value.floorZones) {
+      if (!zone || typeof zone !== "object" || typeof zone.id !== "string" || zone.id.length === 0 || ids.has(zone.id) ||
+          !isFloorTreatmentId(zone.treatment) || !validRect(zone.rect, width, height)) {
+        pushError(issues, "INVALID_FLOOR_ZONE", "Map contains malformed, duplicate, or out-of-bounds floor-treatment metadata.");
+        break;
+      }
+      ids.add(zone.id);
+    }
+  }
 }
 
 export function validateMap(map: GameMap): ValidationReport {
@@ -83,6 +142,9 @@ export function validateMap(map: GameMap): ValidationReport {
       `Map dimensions ${map.width}x${map.height} exceed the supported limit of ` +
         `${MAX_MAP_DIMENSION} per side and ${MAX_MAP_CELLS} total cells.`,
     );
+  }
+  if (map.environment !== undefined && supportedDimensions) {
+    validateEnvironment(map.environment, map.width, map.height, issues);
   }
   if (!Array.isArray(map.tiles)) {
     pushError(issues, "MISSING_TILES", "Map.tiles must be an array.");
@@ -264,6 +326,54 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function sanitizeEnvironment(
+  raw: unknown,
+  width: number,
+  height: number,
+  issues: ValidationIssue[],
+): MapEnvironment | undefined {
+  if (!isPlainObject(raw)) {
+    pushWarning(issues, "INVALID_ENVIRONMENT", "Dropped malformed environment metadata.");
+    return undefined;
+  }
+  const budgetRaw = isPlainObject(raw.featureBudget) ? raw.featureBudget : {};
+  const budget = {
+    major: isFiniteNonNegativeInt(budgetRaw.major) ? Math.min(budgetRaw.major, MAX_LANDMARKS) : 0,
+    secondary: isFiniteNonNegativeInt(budgetRaw.secondary) ? Math.min(budgetRaw.secondary, MAX_LANDMARKS) : 0,
+    minor: isFiniteNonNegativeInt(budgetRaw.minor) ? Math.min(budgetRaw.minor, 8) : 0,
+  };
+  const landmarks: MapLandmark[] = [];
+  const landmarkIds = new Set<string>();
+  for (const item of Array.isArray(raw.landmarks) ? raw.landmarks.slice(0, MAX_LANDMARKS) : []) {
+    if (!isPlainObject(item) || typeof item.id !== "string" || item.id.length === 0 || landmarkIds.has(item.id) ||
+        typeof item.name !== "string" || item.name.length === 0 || !isLandmarkKind(item.kind) ||
+        (item.importance !== "major" && item.importance !== "secondary") || !validRect(item.rect, width, height)) {
+      pushWarning(issues, "INVALID_LANDMARK", "Dropped malformed or out-of-bounds landmark metadata.");
+      continue;
+    }
+    landmarkIds.add(item.id);
+    landmarks.push({
+      id: item.id.slice(0, 80),
+      name: item.name.slice(0, 80),
+      kind: item.kind,
+      importance: item.importance,
+      rect: { ...item.rect },
+    });
+  }
+  const floorZones: FloorTreatmentZone[] = [];
+  const floorZoneIds = new Set<string>();
+  for (const zone of Array.isArray(raw.floorZones) ? raw.floorZones.slice(0, MAX_FLOOR_ZONES) : []) {
+    if (!isPlainObject(zone) || typeof zone.id !== "string" || zone.id.length === 0 || floorZoneIds.has(zone.id) ||
+        !isFloorTreatmentId(zone.treatment) || !validRect(zone.rect, width, height)) {
+      pushWarning(issues, "INVALID_FLOOR_ZONE", "Dropped malformed or out-of-bounds floor-treatment metadata.");
+      continue;
+    }
+    floorZoneIds.add(zone.id);
+    floorZones.push({ id: zone.id.slice(0, 80), treatment: zone.treatment, rect: { ...zone.rect } });
+  }
+  return { featureBudget: budget, landmarks, floorZones };
+}
+
 export function sanitizeLoadedMap(raw: unknown): {
   map: GameMap | null;
   report: ValidationReport;
@@ -430,7 +540,10 @@ export function sanitizeLoadedMap(raw: unknown): {
   if (raw.themeId !== undefined && !isLevelThemeId(raw.themeId)) {
     pushWarning(issues, "INVALID_THEME", `Replaced unknown map theme '${String(raw.themeId)}' with '${themeId}'.`);
   }
-  const cleaned: GameMap = { width, height, tiles, units: cleanedUnits, themeId };
+  const environment = raw.environment === undefined
+    ? undefined
+    : sanitizeEnvironment(raw.environment, width, height, issues);
+  const cleaned: GameMap = { width, height, tiles, units: cleanedUnits, themeId, environment };
 
   const report = validateMap(cleaned);
   return {

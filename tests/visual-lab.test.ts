@@ -12,9 +12,12 @@ describe("visual laboratory", () => {
       "units",
       "overlays",
       "effects",
-      "generated-industrial",
-      "generated-data-core",
-      "generated-derelict",
+      "generated-industrial-landmark",
+      "generated-industrial-quiet",
+      "generated-data-core-landmark",
+      "generated-data-core-quiet",
+      "generated-derelict-landmark",
+      "generated-derelict-quiet",
     ]);
     for (const scene of scenes) {
       expect(scene.state.map.tiles).toHaveLength(scene.state.map.width * scene.state.map.height);
@@ -80,6 +83,11 @@ describe("visual laboratory", () => {
     for (const scene of first) {
       expect(scene.state.map).toMatchObject({ width: 24, height: 24 });
       expect(validateMap(scene.state.map).hasErrors).toBe(false);
+      expect(scene.state.map.environment?.landmarks.length).toBeGreaterThanOrEqual(2);
     }
+    const landmarkHeavy = first.filter((scene) => scene.id.endsWith("-landmark"));
+    const quiet = first.filter((scene) => scene.id.endsWith("-quiet"));
+    expect(landmarkHeavy.every((scene) => scene.state.map.environment!.landmarks.length === 4)).toBe(true);
+    expect(quiet.every((scene) => scene.state.map.environment!.landmarks.length === 2)).toBe(true);
   });
 });
