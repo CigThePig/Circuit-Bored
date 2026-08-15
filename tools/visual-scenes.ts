@@ -200,7 +200,8 @@ function effectsScene(): VisualScene {
   archetypes.forEach((archetypeId, index) => {
     const y = 1 + index * 2;
     const shooter = makeArchetypeUnit(archetypeId, `effects-${archetypeId}`, 1, y);
-    const target = makeArchetypeUnit("rifleman", `effects-target-${index}`, 12, index === 1 ? y + 1 : y);
+    const targetArchetype: UnitArchetypeId = shooter.team === "player" ? "rifleman" : "operator";
+    const target = makeArchetypeUnit(targetArchetype, `effects-target-${index}`, 12, index === 1 ? y + 1 : y);
     target.hp = Math.max(1, target.maxHp - index);
     map.units.push(shooter, target);
     if (index === 1) {
@@ -222,6 +223,8 @@ function effectsScene(): VisualScene {
       targetTeam: target.team,
       shooterX: shooter.x,
       shooterY: shooter.y,
+      targetX: target.x,
+      targetY: target.y,
       fromX: preview.shot.from.x,
       fromY: preview.shot.from.y,
       toX: preview.targetPoint.x,

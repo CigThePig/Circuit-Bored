@@ -118,6 +118,8 @@ export type ShotEffect = {
   targetTeam: Unit["team"];
   shooterX: number;
   shooterY: number;
+  targetX: number;
+  targetY: number;
   fromX: number;
   fromY: number;
   toX: number;
@@ -1428,6 +1430,57 @@ function shotVisualOrigin(
   };
 }
 
+/**
+ * A target may be legally exposed from the adjacent peek tile while its body
+ * remains rendered as a short lean from its home tile. Keep combat's exposure
+ * coordinate in the effect, but terminate the artwork on that rendered body.
+ */
+function shotVisualEndpoint(
+  effect: ShotEffect,
+  cell: number,
+): { x: number; y: number } {
+  const targetX = effect.targetX * cell + cell / 2;
+  const targetY = effect.targetY * cell + cell / 2;
+  const exposureX = effect.toX - effect.targetX;
+  const exposureY = effect.toY - effect.targetY;
+  const exposureLength = Math.hypot(exposureX, exposureY);
+  if (exposureLength === 0) return { x: targetX, y: targetY };
+  return {
+    x: targetX + (exposureX / exposureLength) * cell * PLAYER_POSE.peekOffset,
+    y: targetY + (exposureY / exposureLength) * cell * PLAYER_POSE.peekOffset,
+  };
+}
+
+function effectHash(id: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function missedEndpoint(
+  effect: ShotEffect,
+  from: { x: number; y: number },
+  target: { x: number; y: number },
+  cell: number,
+): { x: number; y: number } {
+  const dx = target.x - from.x;
+  const dy = target.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const hash = effectHash(effect.id);
+  const side = (hash & 1) === 0 ? -1 : 1;
+  const lateral = cell * (0.44 + ((hash >>> 8) & 0x3) * 0.045) * side;
+  const forward = cell * (((hash >>> 4) & 0x3) - 1.5) * 0.045;
+  return {
+    x: target.x - uy * lateral + ux * forward,
+    y: target.y + ux * lateral + uy * forward,
+  };
+}
+
 function drawShotEffect(
   ctx: CanvasRenderingContext2D,
   cell: number,
@@ -1439,8 +1492,12 @@ function drawShotEffect(
   const visualOrigin = shotVisualOrigin(effect, cell);
   const fromX = visualOrigin.x;
   const fromY = visualOrigin.y;
-  const toX = effect.toX * cell + cell / 2;
-  const toY = effect.toY * cell + cell / 2;
+  const targetEndpoint = shotVisualEndpoint(effect, cell);
+  const visualEndpoint = effect.hit
+    ? targetEndpoint
+    : missedEndpoint(effect, visualOrigin, targetEndpoint, cell);
+  const toX = visualEndpoint.x;
+  const toY = visualEndpoint.y;
   const dx = toX - fromX;
   const dy = toY - fromY;
   const distance = Math.hypot(dx, dy) || 1;

@@ -30,6 +30,8 @@ describe("visual laboratory", () => {
     for (const effect of effects) {
       const shooter = state.map.units.find((unit) => unit.id === effect.shooterId)!;
       const target = state.map.units.find((unit) => unit.id === effect.targetId)!;
+      expect(target.team).not.toBe(shooter.team);
+      expect({ x: effect.targetX, y: effect.targetY }).toEqual({ x: target.x, y: target.y });
       // The defeated silhouette is an artwork state; restore one hit point so
       // combat geometry can verify the canonical shot independently.
       const originalHp = target.hp;

@@ -350,6 +350,8 @@ export function startRuntime(
       targetTeam: target.team,
       shooterX: shooter.x,
       shooterY: shooter.y,
+      targetX: target.x,
+      targetY: target.y,
       fromX: result.from.x,
       fromY: result.from.y,
       toX: result.targetPoint.x,
