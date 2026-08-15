@@ -41,6 +41,7 @@ export type RuntimeOptions = {
   onComplete?: (outcome: EncounterOutcome, map: GameMap) => void;
   exitLabel?: string;
   completionLabel?: string | ((outcome: EncounterOutcome) => string);
+  minimumCellSize?: number;
 };
 
 export type RuntimeHandle = {
@@ -114,7 +115,7 @@ export function startRuntime(
     movementEffects,
   };
 
-  resizeCanvasForMap(canvas, map);
+  resizeCanvasForMap(canvas, map, options.minimumCellSize);
 
   const turnLabel = document.createElement("div");
   turnLabel.className = "status";
@@ -674,7 +675,7 @@ export function startRuntime(
   if (!outcome && turn === "enemy") void animateEnemyTurn();
 
   const resize = () => {
-    resizeCanvasForMap(canvas, map);
+    resizeCanvasForMap(canvas, map, options.minimumCellSize);
     redraw();
   };
 

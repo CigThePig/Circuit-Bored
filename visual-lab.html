@@ -33,13 +33,14 @@
         background-size: 24px 24px, 24px 24px, auto;
       }
       button, select, input { font: inherit; }
-      button, select {
+      button, select, input[type="text"] {
         min-height: 38px;
         border: 1px solid var(--line);
         border-radius: 4px;
         color: var(--text);
         background: linear-gradient(#172734, #101b25);
       }
+      input[type="text"] { min-height: 38px; padding: 8px 10px; }
       button { padding: 8px 12px; cursor: pointer; }
       button:hover, select:hover { border-color: var(--line-hot); }
       button.primary { color: var(--cyan); border-color: rgba(88,228,241,.65); }
@@ -154,7 +155,20 @@
         </div>
         <label class="toggle"><input id="show-overlays" type="checkbox" checked /> Show overlays</label>
         <label class="toggle"><input id="animate" type="checkbox" /> Animate units</label>
+        <div class="control">
+          <label for="inspection-theme">Inspect theme</label>
+          <select id="inspection-theme">
+            <option value="industrial">Foundry</option>
+            <option value="data_core">Data Core</option>
+            <option value="derelict">Salvage Deck</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="inspection-seed">Inspect seed</label>
+          <input id="inspection-seed" type="text" value="REVIEW-SEED-1" maxlength="80" />
+        </div>
         <div class="toolbar-actions">
+          <button id="inspect-seed">Inspect seed</button>
           <button id="copy-diagnostics">Copy diagnostics</button>
           <button id="export-sheet" class="primary">Export contact sheet</button>
         </div>
@@ -171,7 +185,7 @@
 
       <div id="status" class="status" role="status" aria-live="polite"></div>
       <footer>
-        Shortcuts: <kbd>1</kbd>–<kbd>5</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size and diagnostic settings.
+        Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size, seed inspection, and diagnostic settings.
       </footer>
     </div>
     <script type="module" src="/tools/visual-lab.ts"></script>

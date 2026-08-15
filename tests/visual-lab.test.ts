@@ -7,7 +7,15 @@ import { buildVisualScenes } from "../tools/visual-scenes.ts";
 describe("visual laboratory", () => {
   it("keeps a stable scene for every high-risk visual category", () => {
     const scenes = buildVisualScenes();
-    expect(scenes.map((scene) => scene.id)).toEqual(["terrain", "units", "overlays", "effects", "encounter"]);
+    expect(scenes.map((scene) => scene.id)).toEqual([
+      "terrain",
+      "units",
+      "overlays",
+      "effects",
+      "generated-industrial",
+      "generated-data-core",
+      "generated-derelict",
+    ]);
     for (const scene of scenes) {
       expect(scene.state.map.tiles).toHaveLength(scene.state.map.width * scene.state.map.height);
       expect(scene.description.length).toBeGreaterThan(20);
@@ -63,10 +71,15 @@ describe("visual laboratory", () => {
     expect(overlays.coverIndicators).toHaveLength(2);
   });
 
-  it("uses a deterministic valid generated encounter as the integration scene", () => {
-    const first = buildVisualScenes().find((scene) => scene.id === "encounter")!.state.map;
-    const second = buildVisualScenes().find((scene) => scene.id === "encounter")!.state.map;
-    expect(first).toEqual(second);
-    expect(validateMap(first).hasErrors).toBe(false);
+  it("uses deterministic valid generator output for every theme", () => {
+    const first = buildVisualScenes().filter((scene) => scene.id.startsWith("generated-"));
+    const second = buildVisualScenes().filter((scene) => scene.id.startsWith("generated-"));
+    expect(first.map((scene) => scene.state.map)).toEqual(second.map((scene) => scene.state.map));
+    expect(new Set(first.map((scene) => scene.state.map.themeId)))
+      .toEqual(new Set(["industrial", "data_core", "derelict"]));
+    for (const scene of first) {
+      expect(scene.state.map).toMatchObject({ width: 24, height: 24 });
+      expect(validateMap(scene.state.map).hasErrors).toBe(false);
+    }
   });
 });

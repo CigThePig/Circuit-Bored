@@ -23,6 +23,24 @@ function runEnemyTurn(map: ReturnType<typeof buildMap>, enemyIdx: number): AiAct
 }
 
 describe("AI movement", () => {
+  it("targets the route-nearest player instead of a Manhattan-near unit behind bulkheads", () => {
+    const map = buildMap([
+      ".......",
+      ".......",
+      ".......",
+      ".#####.",
+      ".......",
+    ], [
+      { id: "sealed-near", team: "player", x: 3, y: 2 },
+      { id: "open-far", team: "player", x: 6, y: 4 },
+      { id: "pathfinder", team: "enemy", x: 3, y: 4 },
+    ]);
+    const session = createAiSession();
+    const enemy = map.units[2];
+    beginEnemyTurn(map, enemy, session);
+    expect(session.turnTargets.get(enemy.id)).toBe("open-far");
+  });
+
   it("does not step onto the player's occupied tile", () => {
     const map = buildMap([
       "p.....e",

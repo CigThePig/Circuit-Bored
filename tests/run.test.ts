@@ -151,8 +151,21 @@ describe("run persistence", () => {
     const loaded = loadRunWithReport();
     expect(loaded.error).toBeNull();
     expect(loaded.run?.activeEncounter?.turn).toBe("enemy");
+    expect(loaded.run?.activeEncounter?.map.themeId).toBe(map.themeId);
     expect(loaded.run?.activeEncounter?.map.units.find((unit) => unit.id === player.id))
       .toMatchObject({ hp: player.hp, x: player.x, ap: 1, peekExposure: player.peekExposure });
+  });
+
+  it("loads version-one encounter saves created before theme metadata existed", () => {
+    const run = enterFirstCombat("OLD-THEME-SAVE");
+    const serialized = JSON.parse(JSON.stringify(run)) as {
+      activeEncounter: { map: { themeId?: string } };
+    };
+    delete serialized.activeEncounter.map.themeId;
+    localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(serialized));
+    const loaded = loadRunWithReport();
+    expect(loaded.error).toBeNull();
+    expect(loaded.run?.activeEncounter?.map.themeId).toBe("industrial");
   });
 
   it("fails safely for corrupt and incompatible saves", () => {

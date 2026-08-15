@@ -1,4 +1,9 @@
 import { getTile, type GameMap, type Unit } from "./map.ts";
+import {
+  DEFAULT_LEVEL_THEME_ID,
+  levelThemeId,
+  type LevelThemeId,
+} from "./themes.ts";
 
 export type UnitVisualState = {
   spent?: boolean;
@@ -263,6 +268,122 @@ const PALETTE = {
   FLOAT_STROKE: "rgba(0, 0, 0, 0.85)",
 } as const;
 
+type TerrainPalette = {
+  floorBase: string;
+  floorAlt: string;
+  floorRim: string;
+  floorSeam: string;
+  floorGlyph: string;
+  floorWear: string;
+  floorLight: string;
+  wallBase: string;
+  wallMid: string;
+  wallAlt: string;
+  wallBevelHi: string;
+  wallBevelLo: string;
+  wallPanel: string;
+  wallBracket: string;
+  wallLight: string;
+  wallPipe: string;
+  wallPipeHi: string;
+  wallScreen: string;
+  coverFill: string;
+  coverTop: string;
+  coverRim: string;
+  machineryFill: string;
+  machineryTop: string;
+  coolant: string;
+  hazardA: string;
+  hazardB: string;
+};
+
+const TERRAIN_PALETTES: Record<LevelThemeId, TerrainPalette> = {
+  industrial: {
+    floorBase: PALETTE.FLOOR_BASE,
+    floorAlt: PALETTE.FLOOR_ALT,
+    floorRim: PALETTE.FLOOR_RIM,
+    floorSeam: PALETTE.FLOOR_SEAM,
+    floorGlyph: PALETTE.FLOOR_GLYPH,
+    floorWear: PALETTE.FLOOR_WEAR,
+    floorLight: PALETTE.FLOOR_LIGHT,
+    wallBase: PALETTE.WALL_BASE,
+    wallMid: PALETTE.WALL_MID,
+    wallAlt: PALETTE.WALL_FACE_ALT,
+    wallBevelHi: PALETTE.WALL_BEVEL_HI,
+    wallBevelLo: PALETTE.WALL_BEVEL_LO,
+    wallPanel: PALETTE.WALL_PANEL,
+    wallBracket: PALETTE.WALL_BRACKET,
+    wallLight: PALETTE.WALL_LIGHT,
+    wallPipe: PALETTE.WALL_PIPE,
+    wallPipeHi: PALETTE.WALL_PIPE_HI,
+    wallScreen: PALETTE.WALL_SCREEN,
+    coverFill: PALETTE.HALFCOVER_FILL,
+    coverTop: PALETTE.HALFCOVER_TOP,
+    coverRim: PALETTE.HALFCOVER_RIM,
+    machineryFill: PALETTE.MACHINERY_FILL,
+    machineryTop: PALETTE.MACHINERY_TOP,
+    coolant: PALETTE.COOLANT,
+    hazardA: PALETTE.HAZARD_YELLOW,
+    hazardB: PALETTE.HAZARD_BLACK,
+  },
+  data_core: {
+    floorBase: "#14222b",
+    floorAlt: "#182934",
+    floorRim: "#2a414d",
+    floorSeam: "rgba(154, 209, 221, 0.20)",
+    floorGlyph: "rgba(110, 235, 247, 0.23)",
+    floorWear: "rgba(2, 9, 14, 0.12)",
+    floorLight: "#6ef2ff",
+    wallBase: "#0b1420",
+    wallMid: "#344f63",
+    wallAlt: "#2b4357",
+    wallBevelHi: "#badce2",
+    wallBevelLo: "#03070d",
+    wallPanel: "rgba(220, 246, 250, 0.24)",
+    wallBracket: "rgba(110, 238, 247, 0.66)",
+    wallLight: "#ffcf5a",
+    wallPipe: "#2a4455",
+    wallPipeHi: "#7297a7",
+    wallScreen: "#0d4655",
+    coverFill: "#294454",
+    coverTop: "#5f8797",
+    coverRim: "#071019",
+    machineryFill: "#203440",
+    machineryTop: "#557181",
+    coolant: "#70f0ff",
+    hazardA: "#f1f4e8",
+    hazardB: "#b9485c",
+  },
+  derelict: {
+    floorBase: "#171816",
+    floorAlt: "#1d1e1a",
+    floorRim: "#34352f",
+    floorSeam: "rgba(166, 157, 126, 0.18)",
+    floorGlyph: "rgba(116, 185, 165, 0.15)",
+    floorWear: "rgba(0, 0, 0, 0.38)",
+    floorLight: "#75c8ae",
+    wallBase: "#141512",
+    wallMid: "#4a463b",
+    wallAlt: "#393a32",
+    wallBevelHi: "#9c9682",
+    wallBevelLo: "#050603",
+    wallPanel: "rgba(217, 204, 165, 0.16)",
+    wallBracket: "rgba(181, 173, 136, 0.45)",
+    wallLight: "#d96b45",
+    wallPipe: "#3d443d",
+    wallPipeHi: "#768176",
+    wallScreen: "#254039",
+    coverFill: "#51402d",
+    coverTop: "#8c704c",
+    coverRim: "#1b140d",
+    machineryFill: "#343a36",
+    machineryTop: "#626c63",
+    coolant: "#76b89c",
+    hazardA: "#c8a843",
+    hazardB: "#252015",
+  },
+};
+
 const ctxCache = new WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>();
 
 function shotEffectProgress(effect: ShotEffect, nowMs: number): number {
@@ -300,9 +421,12 @@ function getCtx(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   return ctx;
 }
 
-export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap): number {
+export function resizeCanvasForMap(canvas: HTMLCanvasElement, map: GameMap, minimumCellSize = 1): number {
   const cssWidth = Math.max(1, Math.min(window.innerWidth, 480));
-  const cell = Math.max(1, Math.floor(cssWidth / map.width));
+  // Generated encounters opt into the documented 28 px gameplay minimum and
+  // let the board shell pan on smaller screens. Editor maps keep their fitted
+  // cell size so a valid large map cannot allocate an oversized backing canvas.
+  const cell = Math.max(1, minimumCellSize, Math.floor(cssWidth / map.width));
   const widthPx = cell * map.width;
   const heightPx = cell * map.height;
   const dpr = window.devicePixelRatio || 1;
@@ -332,11 +456,11 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
       const t = map.tiles[y * map.width + x];
       const px = x * cell;
       if (t === "wall") {
-        drawWallTile(ctx, px, py, cell, x, y, map);
+        drawWallTile(ctx, px, py, cell, x, y, map, levelThemeId(map.themeId));
       } else if (t === "half_cover") {
-        drawHalfCoverTile(ctx, px, py, cell, x, y);
+        drawHalfCoverTile(ctx, px, py, cell, x, y, levelThemeId(map.themeId));
       } else {
-        drawFloorTile(ctx, px, py, cell, x, y);
+        drawFloorTile(ctx, px, py, cell, x, y, levelThemeId(map.themeId));
       }
     }
   }
@@ -445,12 +569,66 @@ export type EnvironmentVariant =
   | "barricade"
   | "machinery";
 
+type ThemedEnvironmentVariant = EnvironmentVariant
+  | "clean_panel"
+  | "access_grid"
+  | "illuminated_strip"
+  | "reinforced_bulkhead"
+  | "server_bank"
+  | "security_panel"
+  | "console"
+  | "security_barricade"
+  | "server_console"
+  | "worn_deck"
+  | "broken_plate"
+  | "maintenance_grate"
+  | "exposed_conduit"
+  | "damaged_bulkhead"
+  | "pipe_cluster"
+  | "patchwork_wall"
+  | "salvage_pile"
+  | "improvised_barricade"
+  | "damaged_machinery";
+
 export function environmentVariant(
   tile: "floor" | "wall" | "half_cover",
   x: number,
   y: number,
-): EnvironmentVariant {
-  const variant = tileHash(x, y) % 12;
+  themeId: LevelThemeId = DEFAULT_LEVEL_THEME_ID,
+): ThemedEnvironmentVariant {
+  const salt = themeId === "industrial" ? 0 : themeId === "data_core" ? 71 : 149;
+  const variant = tileHash(x + salt, y - salt) % 12;
+  if (themeId === "data_core") {
+    if (tile === "floor") {
+      if (variant === 0 || variant === 6) return "access_grid";
+      if (variant === 4) return "illuminated_strip";
+      return "clean_panel";
+    }
+    if (tile === "wall") {
+      if (variant === 2 || variant === 7) return "server_bank";
+      if (variant === 5 || variant === 10) return "security_panel";
+      return "reinforced_bulkhead";
+    }
+    if (variant < 4) return "console";
+    if (variant < 8) return "security_barricade";
+    return "server_console";
+  }
+  if (themeId === "derelict") {
+    if (tile === "floor") {
+      if (variant === 0 || variant === 6) return "broken_plate";
+      if (variant === 4) return "maintenance_grate";
+      if (variant === 8 || variant === 9) return "exposed_conduit";
+      return "worn_deck";
+    }
+    if (tile === "wall") {
+      if (variant === 2 || variant === 7) return "pipe_cluster";
+      if (variant === 5 || variant === 10) return "patchwork_wall";
+      return "damaged_bulkhead";
+    }
+    if (variant < 4) return "salvage_pile";
+    if (variant < 8) return "improvised_barricade";
+    return "damaged_machinery";
+  }
   if (tile === "floor") {
     if (variant === 0) return "service_hatch";
     if (variant === 4) return "vent";
@@ -827,15 +1005,17 @@ function drawFloorTile(
   cell: number,
   x: number,
   y: number,
+  themeId: LevelThemeId,
 ): void {
   const h = tileHash(x, y);
-  const variant = environmentVariant("floor", x, y);
-  ctx.fillStyle = (h & 1) === 0 ? PALETTE.FLOOR_BASE : PALETTE.FLOOR_ALT;
+  const variant = environmentVariant("floor", x, y, themeId);
+  const terrain = TERRAIN_PALETTES[themeId];
+  ctx.fillStyle = (h & 1) === 0 ? terrain.floorBase : terrain.floorAlt;
   ctx.fillRect(px, py, cell, cell);
 
   // Recessed deck seams keep the board readable without looking like a
   // featureless chess grid.
-  ctx.strokeStyle = PALETTE.FLOOR_RIM;
+  ctx.strokeStyle = terrain.floorRim;
   ctx.lineWidth = 1;
   ctx.strokeRect(px + 0.5, py + 0.5, cell - 1, cell - 1);
   const cx = px + cell / 2;
@@ -843,11 +1023,11 @@ function drawFloorTile(
   ctx.save();
   ctx.lineWidth = 1;
 
-  if (variant === "service_hatch") {
+  if (variant === "service_hatch" || variant === "access_grid" || variant === "broken_plate") {
     const inset = cell * 0.19;
     ctx.fillStyle = "rgba(5,10,14,.24)";
     ctx.fillRect(px + inset, py + inset, cell - inset * 2, cell - inset * 2);
-    ctx.strokeStyle = PALETTE.FLOOR_GLYPH;
+    ctx.strokeStyle = terrain.floorGlyph;
     ctx.strokeRect(px + inset + 0.5, py + inset + 0.5, cell - inset * 2 - 1, cell - inset * 2 - 1);
     const bracket = cell * 0.09;
     ctx.beginPath();
@@ -856,12 +1036,20 @@ function drawFloorTile(
     ctx.moveTo(cx, cy - bracket);
     ctx.lineTo(cx, cy + bracket);
     ctx.stroke();
-  } else if (variant === "vent") {
+    if (variant === "broken_plate") {
+      ctx.strokeStyle = terrain.floorWear;
+      ctx.beginPath();
+      ctx.moveTo(px + inset, py + cell * 0.35);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(px + cell - inset, py + cell * 0.68);
+      ctx.stroke();
+    }
+  } else if (variant === "vent" || variant === "maintenance_grate") {
     const ventW = cell * 0.44;
     const ventH = cell * 0.32;
     ctx.fillStyle = "rgba(3,7,10,.46)";
     ctx.fillRect(cx - ventW / 2, cy - ventH / 2, ventW, ventH);
-    ctx.strokeStyle = PALETTE.FLOOR_SEAM;
+    ctx.strokeStyle = terrain.floorSeam;
     ctx.strokeRect(cx - ventW / 2 + 0.5, cy - ventH / 2 + 0.5, ventW - 1, ventH - 1);
     for (let i = -2; i <= 2; i++) {
       const vx = cx + i * ventW * 0.16;
@@ -870,10 +1058,10 @@ function drawFloorTile(
       ctx.lineTo(vx, cy + ventH * 0.32);
       ctx.stroke();
     }
-  } else if (variant === "conduit") {
+  } else if (variant === "conduit" || variant === "illuminated_strip" || variant === "exposed_conduit") {
     const vertical = (h & 2) !== 0;
     const offset = cell * 0.13;
-    ctx.strokeStyle = "rgba(74,177,194,.22)";
+    ctx.strokeStyle = variant === "illuminated_strip" ? terrain.floorLight : terrain.floorGlyph;
     ctx.lineWidth = Math.max(1, cell * 0.045);
     ctx.beginPath();
     if (vertical) {
@@ -890,13 +1078,13 @@ function drawFloorTile(
     ctx.stroke();
   } else {
     // Sparse wear and fasteners make repeated deck plates feel manufactured.
-    ctx.fillStyle = PALETTE.FLOOR_SEAM;
+    ctx.fillStyle = terrain.floorSeam;
     const rivet = Math.max(1, cell * 0.024);
     for (const [rx, ry] of [[0.14, 0.14], [0.86, 0.86]]) {
       ctx.fillRect(px + cell * rx - rivet / 2, py + cell * ry - rivet / 2, rivet, rivet);
     }
     if ((h & 7) === 3) {
-      ctx.strokeStyle = PALETTE.FLOOR_WEAR;
+      ctx.strokeStyle = terrain.floorWear;
       ctx.beginPath();
       ctx.moveTo(px + cell * 0.24, py + cell * 0.72);
       ctx.lineTo(px + cell * 0.42, py + cell * 0.60);
@@ -906,9 +1094,9 @@ function drawFloorTile(
   }
 
   if ((h & 0x3f) === 0x20) {
-    ctx.shadowColor = PALETTE.FLOOR_LIGHT;
+    ctx.shadowColor = terrain.floorLight;
     ctx.shadowBlur = cell * 0.16;
-    ctx.fillStyle = PALETTE.FLOOR_LIGHT;
+    ctx.fillStyle = terrain.floorLight;
     ctx.fillRect(px + cell * 0.20, py + cell * 0.82, cell * 0.60, Math.max(1, cell * 0.035));
   }
   ctx.restore();
@@ -922,8 +1110,10 @@ function drawWallTile(
   x: number,
   y: number,
   map: GameMap,
+  themeId: LevelThemeId,
 ): void {
-  const variant = environmentVariant("wall", x, y);
+  const variant = environmentVariant("wall", x, y, themeId);
+  const terrain = TERRAIN_PALETTES[themeId];
   const north = getTile(map, x, y - 1) === "wall";
   const east = getTile(map, x + 1, y) === "wall";
   const south = getTile(map, x, y + 1) === "wall";
@@ -936,9 +1126,9 @@ function drawWallTile(
   // Walls are rendered as a connected raised mass. Interior tile boundaries
   // recede; only edges facing walkable space receive the strong light/dark
   // profile that makes the structure read as impassable at a glance.
-  ctx.fillStyle = PALETTE.WALL_BASE;
+  ctx.fillStyle = terrain.wallBase;
   ctx.fillRect(px, py, cell, cell);
-  ctx.fillStyle = (h & 1) === 0 ? PALETTE.WALL_MID : PALETTE.WALL_FACE_ALT;
+  ctx.fillStyle = (h & 1) === 0 ? terrain.wallMid : terrain.wallAlt;
   ctx.fillRect(
     px + (west ? 0 : lip),
     py + (north ? 0 : lip),
@@ -948,9 +1138,9 @@ function drawWallTile(
 
   if (!north) {
     const top = ctx.createLinearGradient(0, py, 0, py + lip);
-    top.addColorStop(0, PALETTE.WALL_BEVEL_HI);
+    top.addColorStop(0, terrain.wallBevelHi);
     top.addColorStop(0.24, "#4f6f7b");
-    top.addColorStop(1, PALETTE.WALL_MID);
+    top.addColorStop(1, terrain.wallMid);
     ctx.fillStyle = top;
     ctx.fillRect(px, py, cell, lip);
     ctx.fillStyle = "rgba(222,249,252,.72)";
@@ -962,7 +1152,7 @@ function drawWallTile(
   if (!west) {
     const left = ctx.createLinearGradient(px, 0, px + lip, 0);
     left.addColorStop(0, "#648895");
-    left.addColorStop(1, PALETTE.WALL_MID);
+    left.addColorStop(1, terrain.wallMid);
     ctx.fillStyle = left;
     ctx.fillRect(px, py, lip, cell);
     ctx.fillStyle = "rgba(192,235,241,.48)";
@@ -973,8 +1163,8 @@ function drawWallTile(
   }
   if (!south) {
     const bottom = ctx.createLinearGradient(0, py + cell - lip, 0, py + cell);
-    bottom.addColorStop(0, PALETTE.WALL_MID);
-    bottom.addColorStop(1, PALETTE.WALL_BEVEL_LO);
+    bottom.addColorStop(0, terrain.wallMid);
+    bottom.addColorStop(1, terrain.wallBevelLo);
     ctx.fillStyle = bottom;
     ctx.fillRect(px, py + cell - lip, cell, lip);
     ctx.fillStyle = "rgba(0,0,0,.88)";
@@ -982,8 +1172,8 @@ function drawWallTile(
   }
   if (!east) {
     const right = ctx.createLinearGradient(px + cell - lip, 0, px + cell, 0);
-    right.addColorStop(0, PALETTE.WALL_MID);
-    right.addColorStop(1, PALETTE.WALL_BEVEL_LO);
+    right.addColorStop(0, terrain.wallMid);
+    right.addColorStop(1, terrain.wallBevelLo);
     ctx.fillStyle = right;
     ctx.fillRect(px + cell - lip, py, lip, cell);
     ctx.fillStyle = "rgba(0,0,0,.78)";
@@ -1000,12 +1190,12 @@ function drawWallTile(
   );
   ctx.clip();
 
-  if (variant === "pipe_bank") {
+  if (variant === "pipe_bank" || variant === "server_bank" || variant === "pipe_cluster") {
     const vertical = (h & 1) === 0;
     const pipeW = Math.max(2, cell * 0.11);
     for (let i = -1; i <= 1; i++) {
       const offset = i * cell * 0.19;
-      ctx.strokeStyle = i === 0 ? PALETTE.WALL_PIPE_HI : PALETTE.WALL_PIPE;
+      ctx.strokeStyle = i === 0 ? terrain.wallPipeHi : terrain.wallPipe;
       ctx.lineWidth = pipeW;
       ctx.beginPath();
       if (vertical) {
@@ -1017,7 +1207,7 @@ function drawWallTile(
       }
       ctx.stroke();
     }
-    ctx.fillStyle = PALETTE.WALL_BRACKET;
+    ctx.fillStyle = terrain.wallBracket;
     if (vertical) {
       ctx.fillRect(px + cell * 0.14, py + cell * 0.22, cell * 0.72, Math.max(1, cell * 0.05));
       ctx.fillRect(px + cell * 0.14, py + cell * 0.73, cell * 0.72, Math.max(1, cell * 0.05));
@@ -1025,19 +1215,19 @@ function drawWallTile(
       ctx.fillRect(px + cell * 0.22, py + cell * 0.14, Math.max(1, cell * 0.05), cell * 0.72);
       ctx.fillRect(px + cell * 0.73, py + cell * 0.14, Math.max(1, cell * 0.05), cell * 0.72);
     }
-  } else if (variant === "system_panel") {
+  } else if (variant === "system_panel" || variant === "security_panel" || variant === "patchwork_wall") {
     const inset = cell * 0.15;
-    ctx.fillStyle = PALETTE.WALL_MID;
+    ctx.fillStyle = terrain.wallMid;
     ctx.fillRect(px + inset, py + inset, cell - inset * 2, cell - inset * 2);
-    ctx.strokeStyle = PALETTE.WALL_BRACKET;
+    ctx.strokeStyle = terrain.wallBracket;
     ctx.strokeRect(px + inset + 0.5, py + inset + 0.5, cell - inset * 2 - 1, cell - inset * 2 - 1);
-    ctx.fillStyle = PALETTE.WALL_SCREEN;
+    ctx.fillStyle = terrain.wallScreen;
     ctx.fillRect(px + cell * 0.24, py + cell * 0.24, cell * 0.52, cell * 0.25);
-    ctx.fillStyle = PALETTE.FLOOR_LIGHT;
+    ctx.fillStyle = terrain.floorLight;
     ctx.fillRect(px + cell * 0.29, py + cell * 0.30, cell * 0.24, Math.max(1, cell * 0.025));
-    ctx.fillStyle = PALETTE.WALL_LIGHT;
+    ctx.fillStyle = terrain.wallLight;
     ctx.fillRect(px + cell * 0.64, py + cell * 0.30, Math.max(1, cell * 0.05), Math.max(1, cell * 0.05));
-    ctx.strokeStyle = PALETTE.WALL_PANEL;
+    ctx.strokeStyle = terrain.wallPanel;
     for (let i = 0; i < 3; i++) {
       ctx.beginPath();
       ctx.moveTo(px + cell * 0.26, py + cell * (0.62 + i * 0.07));
@@ -1047,7 +1237,7 @@ function drawWallTile(
   } else {
     // Braces follow the wall run so neighboring tiles combine into one piece,
     // rather than repeating the square-with-an-X language of floor hatches.
-    ctx.strokeStyle = PALETTE.WALL_PANEL;
+    ctx.strokeStyle = terrain.wallPanel;
     ctx.lineWidth = Math.max(1, cell * 0.045);
     ctx.beginPath();
     if ((west || east) && !(north || south)) {
@@ -1068,11 +1258,11 @@ function drawWallTile(
     }
     ctx.stroke();
     const hubR = cell * 0.075;
-    ctx.fillStyle = PALETTE.WALL_BASE;
+    ctx.fillStyle = terrain.wallBase;
     ctx.beginPath();
     ctx.arc(px + cell / 2, py + cell / 2, hubR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = PALETTE.WALL_BRACKET;
+    ctx.strokeStyle = terrain.wallBracket;
     ctx.stroke();
   }
   ctx.restore();
@@ -1090,9 +1280,9 @@ function drawWallTile(
 
   if ((h & 0x1f) === 0) {
     const dotSize = Math.max(1, Math.floor(cell * 0.07));
-    ctx.shadowColor = PALETTE.WALL_LIGHT;
+    ctx.shadowColor = terrain.wallLight;
     ctx.shadowBlur = cell * 0.16;
-    ctx.fillStyle = PALETTE.WALL_LIGHT;
+    ctx.fillStyle = terrain.wallLight;
     ctx.fillRect(px + cell - dotSize - 3, py + 3, dotSize, dotSize);
     ctx.shadowBlur = 0;
   }
@@ -1105,9 +1295,11 @@ function drawHalfCoverTile(
   cell: number,
   x: number,
   y: number,
+  themeId: LevelThemeId,
 ): void {
-  drawFloorTile(ctx, px, py, cell, x, y);
-  const variant = environmentVariant("half_cover", x, y);
+  drawFloorTile(ctx, px, py, cell, x, y, themeId);
+  const variant = environmentVariant("half_cover", x, y, themeId);
+  const terrain = TERRAIN_PALETTES[themeId];
   const inset = Math.max(2, Math.floor(cell * 0.18));
   const ox = px + inset;
   const oy = py + inset;
@@ -1119,20 +1311,20 @@ function drawHalfCoverTile(
   ctx.shadowBlur = cell * 0.12;
   ctx.shadowOffsetY = cell * 0.05;
 
-  if (variant === "cargo") {
-    ctx.fillStyle = PALETTE.HALFCOVER_FILL;
+  if (variant === "cargo" || variant === "salvage_pile" || variant === "console") {
+    ctx.fillStyle = terrain.coverFill;
     ctx.fillRect(ox, oy, ow, oh);
-    ctx.fillStyle = PALETTE.HALFCOVER_TOP;
+    ctx.fillStyle = terrain.coverTop;
     ctx.fillRect(ox, oy, ow, Math.max(2, cell * 0.08));
-    ctx.strokeStyle = PALETTE.HALFCOVER_RIM;
+    ctx.strokeStyle = terrain.coverRim;
     ctx.strokeRect(ox + 0.5, oy + 0.5, ow - 1, oh - 1);
     ctx.fillStyle = PALETTE.UNIT_METAL;
     ctx.fillRect(ox + ow * 0.14, oy, ow * 0.10, oh);
     ctx.fillRect(ox + ow * 0.76, oy, ow * 0.10, oh);
-    ctx.fillStyle = "rgba(244,216,132,.72)";
+    ctx.fillStyle = themeId === "data_core" ? terrain.floorLight : "rgba(244,216,132,.72)";
     ctx.fillRect(ox + ow * 0.34, oy + oh * 0.38, ow * 0.32, oh * 0.18);
-  } else if (variant === "barricade") {
-    ctx.fillStyle = PALETTE.MACHINERY_FILL;
+  } else if (variant === "barricade" || variant === "security_barricade" || variant === "improvised_barricade") {
+    ctx.fillStyle = terrain.machineryFill;
     ctx.fillRect(ox, oy + oh * 0.12, ow, oh * 0.76);
     ctx.strokeStyle = PALETTE.UNIT_METAL_HI;
     ctx.strokeRect(ox + 0.5, oy + oh * 0.12 + 0.5, ow - 1, oh * 0.76 - 1);
@@ -1143,7 +1335,7 @@ function drawHalfCoverTile(
     ctx.rect(ox, oy + oh * 0.25, ow, oh * 0.28);
     ctx.clip();
     for (let i = -1; i <= stripes; i++) {
-      ctx.fillStyle = i % 2 === 0 ? PALETTE.HAZARD_YELLOW : PALETTE.HAZARD_BLACK;
+      ctx.fillStyle = i % 2 === 0 ? terrain.hazardA : terrain.hazardB;
       ctx.beginPath();
       ctx.moveTo(ox + i * stripeW, oy + oh * 0.53);
       ctx.lineTo(ox + (i + 1) * stripeW, oy + oh * 0.53);
@@ -1159,20 +1351,20 @@ function drawHalfCoverTile(
   } else {
     // A compact reactor/coolant unit: still unmistakably half cover, but it
     // breaks up the repeated crate language of the original renderer.
-    ctx.fillStyle = PALETTE.MACHINERY_FILL;
+    ctx.fillStyle = terrain.machineryFill;
     ctx.beginPath();
     ctx.ellipse(px + cell / 2, py + cell / 2, ow * 0.45, oh * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = PALETTE.UNIT_METAL_HI;
     ctx.lineWidth = Math.max(1, cell * 0.04);
     ctx.stroke();
-    ctx.fillStyle = PALETTE.MACHINERY_TOP;
+    ctx.fillStyle = terrain.machineryTop;
     ctx.beginPath();
     ctx.ellipse(px + cell / 2, py + cell / 2, ow * 0.31, oh * 0.31, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowColor = PALETTE.COOLANT;
+    ctx.shadowColor = terrain.coolant;
     ctx.shadowBlur = cell * 0.15;
-    ctx.strokeStyle = PALETTE.COOLANT;
+    ctx.strokeStyle = terrain.coolant;
     ctx.lineWidth = Math.max(1, cell * 0.035);
     ctx.beginPath();
     ctx.arc(px + cell / 2, py + cell / 2, ow * 0.19, 0, Math.PI * 2);

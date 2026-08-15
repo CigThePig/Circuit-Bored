@@ -166,8 +166,14 @@
       #canvas-wrap {
         position: relative;
         width: 100%;
+        /* Keep the tactical board itself scrollable on short screens. The HUD
+           remains below this viewport instead of being pushed past the board's
+           selected unit when a layout puts the squad near the bottom edge. */
+        height: min(672px, max(240px, calc(100vh - 164px)));
+        height: min(672px, max(240px, calc(100dvh - 164px)));
         isolation: isolate;
-        overflow: hidden;
+        overflow: auto;
+        overscroll-behavior: contain;
         background: #060a0f;
       }
       #canvas-wrap::after {
@@ -181,6 +187,9 @@
           radial-gradient(circle at 50% 48%, transparent 55%, rgba(0,0,0,.32) 100%);
         box-shadow: inset 0 0 24px rgba(0,0,0,.45);
       }
+      #board-stage {
+        position: relative;
+      }
       #board-shell {
         border-left: 1px solid rgba(90,214,255,.16);
         border-right: 1px solid rgba(90,214,255,.16);
@@ -193,7 +202,7 @@
         background: var(--bg-base);
         box-shadow: 0 0 0 1px var(--line), inset 0 0 24px rgba(0, 0, 0, 0.6);
         filter: saturate(1.08) contrast(1.035);
-        touch-action: none;
+        touch-action: pan-x pan-y;
       }
       #hud {
         padding: 10px;
@@ -393,8 +402,10 @@
       </div>
       <main id="screen"></main>
       <div id="board-shell" class="hidden">
-        <div id="canvas-wrap">
-          <canvas id="canvas" width="384" height="384"></canvas>
+        <div id="board-stage">
+          <div id="canvas-wrap">
+            <canvas id="canvas" width="384" height="384"></canvas>
+          </div>
           <div id="overlay" class="overlay hidden">
             <h2 id="overlay-text">VICTORY</h2>
             <button id="overlay-button" class="primary">Continue</button>

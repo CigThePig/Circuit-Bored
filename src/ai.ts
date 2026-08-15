@@ -50,7 +50,11 @@ function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
   let best: Unit | null = null;
   let bestDist = Infinity;
   for (const u of livingPlayers(map)) {
-    const d = manhattan(enemy.x, enemy.y, u.x, u.y);
+    // Larger compartmentalized maps can make the Manhattan-nearest unit much
+    // farther away in real movement terms. Prefer reachable route distance so
+    // enemies do not press against the wrong side of a bulkhead.
+    const d = aStarRoute(map, enemy.x, enemy.y, u.x, u.y)?.distance
+      ?? manhattan(enemy.x, enemy.y, u.x, u.y) + map.width * map.height;
     if (d < bestDist) {
       bestDist = d;
       best = u;
@@ -238,7 +242,9 @@ function scoreCandidate(
       : AI_SCORE_COVER;
     if (coverFromTarget > 0) score += coverWeight;
     const distanceWeight = enemy.aiBehavior === "assault" ? -3 : AI_SCORE_DISTANCE;
-    score += distanceWeight * manhattan(candidate.x, candidate.y, target.x, target.y);
+    const routeDistance = aStarRoute(map, candidate.x, candidate.y, target.x, target.y)?.distance
+      ?? manhattan(candidate.x, candidate.y, target.x, target.y) + map.width * map.height;
+    score += distanceWeight * routeDistance;
     score += AI_SCORE_ADJACENT_ALLY * adjacentAllyCount(map, enemy, candidate.x, candidate.y);
 
     let exposed = false;

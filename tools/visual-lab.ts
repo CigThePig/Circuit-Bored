@@ -1,5 +1,7 @@
 import { draw, type RenderState } from "../src/render.ts";
-import { buildVisualScenes, type VisualScene } from "./visual-scenes.ts";
+import { generatedEncounterDiagnostics } from "../src/generation.ts";
+import { isLevelThemeId } from "../src/themes.ts";
+import { buildGeneratedThemeScene, buildVisualScenes, type VisualScene } from "./visual-scenes.ts";
 
 type ViewMode = "normal" | "grayscale" | "contrast" | "squint";
 type BackdropMode = "dark" | "light";
@@ -17,6 +19,9 @@ const overlayInput = requiredElement<HTMLInputElement>("show-overlays");
 const animateInput = requiredElement<HTMLInputElement>("animate");
 const exportButton = requiredElement<HTMLButtonElement>("export-sheet");
 const diagnosticsButton = requiredElement<HTMLButtonElement>("copy-diagnostics");
+const inspectionTheme = requiredElement<HTMLSelectElement>("inspection-theme");
+const inspectionSeed = requiredElement<HTMLInputElement>("inspection-seed");
+const inspectionButton = requiredElement<HTMLButtonElement>("inspect-seed");
 const status = requiredElement<HTMLElement>("status");
 
 let animationFrame = 0;
@@ -53,6 +58,9 @@ function initializeFromUrl(): void {
   backdropSelect.value = backdrop;
   overlayInput.checked = params.get("overlays") !== "0";
   animateInput.checked = params.get("animate") === "1";
+  const theme = params.get("inspectionTheme");
+  if (isLevelThemeId(theme)) inspectionTheme.value = theme;
+  inspectionSeed.value = params.get("inspectionSeed")?.slice(0, 80) || "REVIEW-SEED-1";
 }
 
 function syncUrl(): void {
@@ -62,6 +70,8 @@ function syncUrl(): void {
   params.set("backdrop", backdropSelect.value);
   params.set("overlays", overlayInput.checked ? "1" : "0");
   params.set("animate", animateInput.checked ? "1" : "0");
+  params.set("inspectionTheme", inspectionTheme.value);
+  params.set("inspectionSeed", inspectionSeed.value.trim() || "REVIEW-SEED-1");
   history.replaceState(null, "", `${location.pathname}?${params}`);
 }
 
@@ -207,7 +217,12 @@ async function copyDiagnostics(): Promise<void> {
     animation: animateInput.checked,
     devicePixelRatio: window.devicePixelRatio,
     viewport: { width: window.innerWidth, height: window.innerHeight },
-    scenes: scenes.map(({ id, state }) => ({ id, width: state.map.width, height: state.map.height })),
+    scenes: scenes.map(({ id, state }) => ({
+      id,
+      width: state.map.width,
+      height: state.map.height,
+      generation: generatedEncounterDiagnostics(state.map),
+    })),
   };
   try {
     await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
@@ -222,8 +237,7 @@ function setStatus(message: string, error = false): void {
   status.style.color = error ? "var(--red)" : "var(--cyan)";
 }
 
-function buildSceneCards(): void {
-  for (const [index, scene] of scenes.entries()) {
+function buildSceneCard(scene: VisualScene, index: number): void {
     const article = document.createElement("article");
     article.className = "scene";
     article.id = `scene-${scene.id}`;
@@ -259,12 +273,39 @@ function buildSceneCards(): void {
     article.append(head, stage);
     sceneGrid.appendChild(article);
     canvases.set(scene.id, canvas);
+}
+
+function buildSceneCards(): void {
+  for (const [index, scene] of scenes.entries()) buildSceneCard(scene, index);
+}
+
+function inspectSeed(): void {
+  const themeId = isLevelThemeId(inspectionTheme.value) ? inspectionTheme.value : "industrial";
+  const seed = inspectionSeed.value.trim() || "REVIEW-SEED-1";
+  const generated = buildGeneratedThemeScene(themeId, seed);
+  const scene: VisualScene = {
+    ...generated,
+    id: "seed-inspection",
+    title: `Seed inspection · ${generated.title}`,
+  };
+  const existing = scenes.findIndex((candidate) => candidate.id === scene.id);
+  if (existing >= 0) {
+    scenes[existing] = scene;
+    document.getElementById(`scene-${scene.id}`)?.remove();
+    canvases.delete(scene.id);
+  } else {
+    scenes.push(scene);
   }
+  buildSceneCard(scene, existing >= 0 ? existing : scenes.length - 1);
+  drawScene(scene, true);
+  syncUrl();
+  document.getElementById(`scene-${scene.id}`)?.scrollIntoView({ behavior: "smooth" });
+  setStatus(`Generated ${themeId} seed ${seed}.`);
 }
 
 function handleShortcut(event: KeyboardEvent): void {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-  if (/^[1-5]$/.test(event.key)) {
+  if (/^[1-8]$/.test(event.key)) {
     scenes[Number(event.key) - 1]?.id && document.getElementById(`scene-${scenes[Number(event.key) - 1].id}`)?.scrollIntoView({ behavior: "smooth" });
   } else if (event.key.toLowerCase() === "g") {
     viewSelect.value = viewSelect.value === "grayscale" ? "normal" : "grayscale";
@@ -288,5 +329,6 @@ overlayInput.addEventListener("change", () => renderAll(false));
 animateInput.addEventListener("change", () => renderAll(false));
 exportButton.addEventListener("click", exportContactSheet);
 diagnosticsButton.addEventListener("click", () => void copyDiagnostics());
+inspectionButton.addEventListener("click", inspectSeed);
 document.addEventListener("visibilitychange", updateAnimation);
 window.addEventListener("keydown", handleShortcut);

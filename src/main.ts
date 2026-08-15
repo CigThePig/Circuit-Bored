@@ -18,6 +18,7 @@ import {
   type RunState,
 } from "./run.ts";
 import { startRuntime, type RuntimeHandle } from "./runtime.ts";
+import { revealUnitInBoardViewport } from "./boardViewport.ts";
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -26,6 +27,7 @@ function requireElement<T extends HTMLElement>(id: string): T {
 }
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
+const canvasWrap = requireElement<HTMLElement>("canvas-wrap");
 const hud = requireElement<HTMLElement>("hud");
 const boardShell = requireElement<HTMLElement>("board-shell");
 const screen = requireElement<HTMLElement>("screen");
@@ -75,6 +77,12 @@ function showBoard(nextMode: Exclude<AppMode, "screen">): void {
   screen.classList.add("hidden");
   boardShell.classList.remove("hidden");
   screenshotButton.classList.remove("hidden");
+}
+
+function revealInitialPlayer(map: GameMap): void {
+  const player = map.units.find((unit) => unit.team === "player" && unit.hp > 0);
+  if (!player) return;
+  requestAnimationFrame(() => revealUnitInBoardViewport(canvasWrap, canvas, map, player));
 }
 
 function button(label: string, className = "", onClick?: () => void): HTMLButtonElement {
@@ -373,6 +381,7 @@ function enterEncounter(): void {
   runtime = startRuntime(canvas, hud, overlay, overlayText, overlayButton, turnBanner, active.map, renderTitle, {
     preserveUnitState: true,
     initialTurn: active.turn,
+    minimumCellSize: 28,
     exitLabel: "Exit",
     completionLabel: (outcome) => {
       if (outcome === "defeat") return "Run Report";
@@ -392,6 +401,7 @@ function enterEncounter(): void {
       dispatchRun();
     },
   });
+  revealInitialPlayer(active.map);
 }
 
 function dispatchRun(): void {

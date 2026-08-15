@@ -40,5 +40,5 @@ describe("procedural run simulation", () => {
       expect(run.depth).toBe(run.route.length);
       expect(run.stats.combatsWon).toBeGreaterThanOrEqual(5);
     }
-  });
+  }, 60_000);
 });

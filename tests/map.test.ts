@@ -150,6 +150,31 @@ describe("validateMap", () => {
 });
 
 describe("sanitizeLoadedMap", () => {
+  it("defaults old maps without theme metadata to the foundry", () => {
+    const raw = {
+      width: 2,
+      height: 2,
+      tiles: new Array(4).fill("floor"),
+      units: [validUnit("p", "player", 0, 0), validUnit("e", "enemy", 1, 1)],
+    };
+    const result = sanitizeLoadedMap(raw);
+    expect(result.map?.themeId).toBe("industrial");
+    expect(result.report.hasErrors).toBe(false);
+  });
+
+  it("sanitizes unknown theme metadata without rejecting an old save", () => {
+    const raw = {
+      width: 2,
+      height: 2,
+      themeId: "disco_void",
+      tiles: new Array(4).fill("floor"),
+      units: [validUnit("p", "player", 0, 0), validUnit("e", "enemy", 1, 1)],
+    };
+    const result = sanitizeLoadedMap(raw);
+    expect(result.map?.themeId).toBe("industrial");
+    expect(result.report.issues.some((issue) => issue.code === "INVALID_THEME")).toBe(true);
+    expect(result.report.hasErrors).toBe(false);
+  });
   it("returns null on hard structural errors (bad tile length)", () => {
     const raw = {
       width: 4,
@@ -215,6 +240,12 @@ describe("cloneMap", () => {
     const copy = cloneMap(source);
     copy.units[0].peekExposure!.x = 99;
     expect(source.units[0].peekExposure).toEqual({ x: 4, y: 9 });
+  });
+
+  it("preserves stable theme metadata", () => {
+    const source = createTestMap();
+    source.themeId = "derelict";
+    expect(cloneMap(source).themeId).toBe("derelict");
   });
 });
 
