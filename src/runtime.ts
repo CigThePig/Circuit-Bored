@@ -488,7 +488,9 @@ export function startRuntime(
       p.overwatch = false;
       redraw();
       checkOutcome();
-      notifyState();
+      // The caller persists only after this reaction completes. If the player
+      // exits during the animation, the saved encounter still represents the
+      // pre-move state instead of a destination with an unconsumed watch.
       await delay(effect.durationMs);
       if (cancelled) return;
       break;
@@ -511,7 +513,8 @@ export function startRuntime(
       addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
       redraw();
       checkOutcome();
-      notifyState();
+      // Keep the move and its overwatch result as one persistence boundary;
+      // see the player-move continuation that calls notifyState() below.
       await delay(effect.durationMs);
       if (cancelled) return;
       break;
