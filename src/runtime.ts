@@ -9,9 +9,11 @@ import {
 import { attachTapHandler } from "./input.ts";
 import {
   draw,
+  projectileKindForUnit,
   resizeCanvasForMap,
   type FloatingText,
   type RenderState,
+  type ShotEffect,
 } from "./render.ts";
 import {
   canShootTarget,
@@ -19,6 +21,7 @@ import {
   previewShot,
   resolveShot,
   type ShotPreview,
+  type ShotResult,
 } from "./combat.ts";
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 import { createAiSession } from "./aiSession.ts";
@@ -90,6 +93,8 @@ export function startRuntime(
   let busy = false;
 
   const floatingTexts: FloatingText[] = [];
+  const shotEffects: ShotEffect[] = [];
+  let shotEffectSequence = 0;
   const random = options.random ?? Math.random;
   const notifyState = () => options.onStateChange?.(cloneMap(map), turn);
 
@@ -102,6 +107,7 @@ export function startRuntime(
     coverIndicators: [],
     threatMarkers: [],
     sightLines: [],
+    shotEffects,
   };
 
   resizeCanvasForMap(canvas, map);
@@ -206,6 +212,9 @@ export function startRuntime(
             toX: preview.targetPoint.x,
             toY: preview.targetPoint.y,
             hasCover: preview.hadCover,
+            shooterX: selected.x,
+            shooterY: selected.y,
+            mode: preview.shot.mode === "peek" ? "peek" : "direct",
           });
         }
       }
@@ -328,6 +337,27 @@ export function startRuntime(
     });
   };
 
+  const addShotEffect = (shooter: Unit, target: Unit, result: ShotResult) => {
+    shotEffects.push({
+      id: `shot-${shotEffectSequence++}`,
+      shooterId: shooter.id,
+      targetId: target.id,
+      shooterTeam: shooter.team,
+      targetTeam: target.team,
+      shooterX: shooter.x,
+      shooterY: shooter.y,
+      fromX: result.from.x,
+      fromY: result.from.y,
+      toX: result.targetPoint.x,
+      toY: result.targetPoint.y,
+      mode: result.mode,
+      projectile: projectileKindForUnit(shooter),
+      hit: result.hit,
+      startedAt: performance.now(),
+      durationMs: result.mode === "peek" ? 560 : 460,
+    });
+  };
+
   const checkOutcome = () => {
     outcome = encounterOutcome(map);
     if (outcome) {
@@ -362,6 +392,7 @@ export function startRuntime(
       }
       selected.ap -= 2;
       const result = resolveShot(map, selected, tappedUnit, random);
+      addShotEffect(selected, tappedUnit, result);
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, tappedUnit.x, tappedUnit.y, "#ffd83a");
       } else {
@@ -402,6 +433,7 @@ export function startRuntime(
       if (!overwatchShouldFire(map, p, enemy, from, to)) continue;
       p.resolvingOverwatch = true;
       const result = resolveShot(map, p, enemy, random);
+      addShotEffect(p, enemy, result);
       p.resolvingOverwatch = false;
       if (result.hit) {
         addFloating(`HIT ${result.damage}`, enemy.x, enemy.y, "#ffd83a");
@@ -428,6 +460,7 @@ export function startRuntime(
       if (!overwatchShouldFire(map, enemy, player, from, to)) continue;
       enemy.resolvingOverwatch = true;
       const result = resolveShot(map, enemy, player, random);
+      addShotEffect(enemy, player, result);
       enemy.resolvingOverwatch = false;
       enemy.overwatch = false;
       addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
@@ -450,6 +483,7 @@ export function startRuntime(
         const action = takeEnemyAction(map, enemy, aiSession, random);
         if (action.kind === "wait") break;
         if (action.kind === "shoot") {
+          addShotEffect(enemy, action.target, action.result);
           if (action.result.hit) {
             addFloating(`HIT ${action.result.damage}`, action.target.x, action.target.y, "#ffd83a");
           } else {
@@ -534,10 +568,18 @@ export function startRuntime(
         if (floatingTexts[i].expiresAt <= now) floatingTexts.splice(i, 1);
       }
     }
+    if (shotEffects.length > 0) {
+      const now = performance.now();
+      for (let i = shotEffects.length - 1; i >= 0; i--) {
+        if (!shotEffects[i].loop && shotEffects[i].startedAt + shotEffects[i].durationMs <= now) {
+          shotEffects.splice(i, 1);
+        }
+      }
+    }
     // Always repaint while a match is live so the unit idle bob and other
     // time-based effects (threat pulse, peek lean) stay smooth.
     if (outcome === null) redraw();
-    if (outcome === null || floatingTexts.length > 0) {
+    if (outcome === null || floatingTexts.length > 0 || shotEffects.length > 0) {
       rafId = requestAnimationFrame(tick);
     } else {
       rafId = 0;

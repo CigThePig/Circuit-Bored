@@ -6,12 +6,22 @@ import { buildVisualScenes } from "../tools/visual-scenes.ts";
 describe("visual laboratory", () => {
   it("keeps a stable scene for every high-risk visual category", () => {
     const scenes = buildVisualScenes();
-    expect(scenes.map((scene) => scene.id)).toEqual(["terrain", "units", "overlays", "encounter"]);
+    expect(scenes.map((scene) => scene.id)).toEqual(["terrain", "units", "overlays", "effects", "encounter"]);
     for (const scene of scenes) {
       expect(scene.state.map.tiles).toHaveLength(scene.state.map.width * scene.state.map.height);
       expect(scene.description.length).toBeGreaterThan(20);
       expect(scene.review.length).toBeGreaterThan(20);
     }
+  });
+
+  it("covers every projectile family plus peek, hit, and miss animation states", () => {
+    const effects = buildVisualScenes().find((scene) => scene.id === "effects")!.state.shotEffects!;
+    expect(new Set(effects.map((effect) => effect.projectile)))
+      .toEqual(new Set(["pulse", "tracer", "scatter", "rail", "heavy"]));
+    expect(effects.some((effect) => effect.mode === "peek")).toBe(true);
+    expect(effects.some((effect) => effect.hit)).toBe(true);
+    expect(effects.some((effect) => !effect.hit)).toBe(true);
+    expect(effects.every((effect) => effect.loop)).toBe(true);
   });
 
   it("shows every archetype and representative combat-overlay states", () => {

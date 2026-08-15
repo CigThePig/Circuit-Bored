@@ -368,7 +368,12 @@ describe("committed peek exposure", () => {
     expect(shot.canShoot).toBe(true);
     expect(shot.mode).toBe("peek");
     expect(shooter.peekExposure).toBeNull();
-    resolveShot(map, shooter, target, () => 0.99);
+    const result = resolveShot(map, shooter, target, () => 0.99);
+    expect(result).toMatchObject({
+      mode: "peek",
+      from: { x: 2, y: 2 },
+      targetPoint: { x: 4, y: 2 },
+    });
     expect(shooter.peekExposure).toEqual({ x: 2, y: 2 });
   });
 
@@ -380,7 +385,12 @@ describe("committed peek exposure", () => {
     const [shooter, target] = map.units;
     const shot = canShootTarget(map, shooter, target);
     expect(shot.mode).toBe("direct");
-    resolveShot(map, shooter, target, () => 0.99);
+    const result = resolveShot(map, shooter, target, () => 0.99);
+    expect(result).toMatchObject({
+      mode: "direct",
+      from: { x: 0, y: 0 },
+      targetPoint: { x: 4, y: 0 },
+    });
     expect(shooter.peekExposure).toBeNull();
   });
 

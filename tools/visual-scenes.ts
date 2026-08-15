@@ -4,7 +4,11 @@ import {
 } from "../src/content.ts";
 import { generateEncounter } from "../src/generation.ts";
 import { setTile, type GameMap } from "../src/map.ts";
-import type { RenderState } from "../src/render.ts";
+import {
+  projectileKindForUnit,
+  type RenderState,
+  type ShotEffect,
+} from "../src/render.ts";
 import { SeededRng } from "../src/rng.ts";
 
 export type VisualScene = {
@@ -34,6 +38,7 @@ function emptyState(map: GameMap): RenderState {
     coverIndicators: [],
     threatMarkers: [],
     sightLines: [],
+    shotEffects: [],
   };
 }
 
@@ -148,11 +153,88 @@ function overlayScene(): VisualScene {
         { x: watcher.x, y: watcher.y },
       ],
       sightLines: [
-        { fromX: rook.x, fromY: rook.y, toX: clear.x, toY: clear.y, hasCover: false },
-        { fromX: rook.x, fromY: rook.y, toX: covered.x, toY: covered.y, hasCover: true },
-        { fromX: rook.x, fromY: rook.y, toX: difficult.x, toY: difficult.y, hasCover: true },
+        {
+          fromX: 2,
+          fromY: 2,
+          toX: clear.x,
+          toY: clear.y,
+          hasCover: false,
+          shooterX: rook.x,
+          shooterY: rook.y,
+          mode: "peek",
+        },
+        {
+          fromX: rook.x,
+          fromY: rook.y,
+          toX: covered.x,
+          toY: covered.y,
+          hasCover: true,
+          shooterX: rook.x,
+          shooterY: rook.y,
+          mode: "direct",
+        },
+        {
+          fromX: rook.x,
+          fromY: rook.y,
+          toX: difficult.x,
+          toY: difficult.y,
+          hasCover: true,
+          shooterX: rook.x,
+          shooterY: rook.y,
+          mode: "direct",
+        },
       ],
+      shotEffects: [],
     },
+  };
+}
+
+function effectsScene(): VisualScene {
+  const map = emptyMap(15, 7);
+  const archetypes: UnitArchetypeId[] = ["runner", "operator", "scrapper", "marksman", "sentinel"];
+  const shotEffects: ShotEffect[] = [];
+
+  archetypes.forEach((archetypeId, index) => {
+    const y = index + 1;
+    const shooter = makeArchetypeUnit(archetypeId, `effects-${archetypeId}`, 1, y);
+    const target = makeArchetypeUnit("rifleman", `effects-target-${index}`, 12, y);
+    target.hp = Math.max(1, target.maxHp - index);
+    map.units.push(shooter, target);
+    if (index === 1) {
+      setTile(map, 2, y, "wall");
+      setTile(map, 2, y - 1, "wall");
+      shooter.peekExposure = { x: 2, y: y + 1 };
+    }
+    const durationMs = 1200;
+    shotEffects.push({
+      id: `effects-shot-${index}`,
+      shooterId: shooter.id,
+      targetId: target.id,
+      shooterTeam: shooter.team,
+      targetTeam: target.team,
+      shooterX: shooter.x,
+      shooterY: shooter.y,
+      fromX: index === 1 ? 2 : shooter.x,
+      fromY: index === 1 ? y + 1 : shooter.y,
+      toX: target.x,
+      toY: target.y,
+      mode: index === 1 ? "peek" : "direct",
+      projectile: projectileKindForUnit(shooter),
+      hit: index !== 3,
+      startedAt: -durationMs * (0.12 + index * 0.14),
+      durationMs,
+      loop: true,
+    });
+  });
+
+  const state = emptyState(map);
+  state.shotEffects = shotEffects;
+  return {
+    id: "effects",
+    title: "Weapon and impact sprites",
+    description: "Every projectile family, muzzle flash, peek-shot pose, miss marker, and hit reaction in a repeatable scene.",
+    review: "Shots should read by weapon family while cover leans and impacts remain visible at 28 px.",
+    state,
   };
 }
 
@@ -181,5 +263,5 @@ function generatedScene(): VisualScene {
 }
 
 export function buildVisualScenes(): VisualScene[] {
-  return [terrainScene(), unitScene(), overlayScene(), generatedScene()];
+  return [terrainScene(), unitScene(), overlayScene(), effectsScene(), generatedScene()];
 }
