@@ -403,14 +403,19 @@ export function paintServerVault(map: GameMap, rect: Rect, options: LandmarkOpti
   paintCompartment(map, rect, [orientation, OPPOSITE[orientation]]);
   // Interior rack rhythm keeps the chamber from reading as an empty box.
   const inner = { x: rect.x + 2, y: rect.y + 2, width: rect.width - 4, height: rect.height - 4 };
+  // Racks are placed as mirrored pairs against both walls with a service aisle
+  // left down the middle. A single alternating row would survive the Data Core
+  // board mirror as one merged bar across the chamber instead of as a rhythm.
   const vertical = inner.height >= inner.width;
-  const rackSpan = Math.max(2, Math.min(3, (vertical ? inner.width : inner.height) - 1));
+  const across = vertical ? inner.width : inner.height;
+  const rackSpan = Math.max(1, Math.min(3, Math.floor((across - 2) / 2)));
   for (let offset = 0; offset < (vertical ? inner.height : inner.width); offset += 2) {
-    const fromStart = (offset / 2 + variant) % 2 === 0;
-    const rack = vertical
-      ? { x: fromStart ? inner.x : inner.x + Math.max(0, inner.width - rackSpan), y: inner.y + offset, width: rackSpan, height: 1 }
-      : { x: inner.x + offset, y: fromStart ? inner.y : inner.y + Math.max(0, inner.height - rackSpan), width: 1, height: rackSpan };
-    paintRect(map, clampRect(map, rack), "wall");
+    for (const nearSide of [true, false]) {
+      const rack = vertical
+        ? { x: nearSide ? inner.x : inner.x + inner.width - rackSpan, y: inner.y + offset, width: rackSpan, height: 1 }
+        : { x: inner.x + offset, y: nearSide ? inner.y : inner.y + inner.height - rackSpan, width: 1, height: rackSpan };
+      paintRect(map, clampRect(map, rack), "wall");
+    }
   }
   // Defensive positions guard the vault approach.
   const approach = frontRow(map, rect, orientation, 2);
