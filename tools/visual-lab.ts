@@ -2,9 +2,24 @@ import { draw, type RenderState } from "../src/render.ts";
 import { generatedEncounterDiagnostics } from "../src/generation.ts";
 import { isLevelThemeId } from "../src/themes.ts";
 import { buildGeneratedThemeScene, buildVisualScenes, type VisualScene } from "./visual-scenes.ts";
+import {
+  captureSearchParams,
+  clampCellSize,
+  isBackdropMode,
+  isViewMode,
+  parseCaptureParams,
+  validateCaptureRequest,
+  SEED_SCENE_ID,
+  type CaptureParams,
+  type ViewMode,
+} from "./visual/capture-params.ts";
+import { VISUAL_BRIDGE_VERSION, type VisualLabBridge } from "./visual/bridge.ts";
 
-type ViewMode = "normal" | "grayscale" | "contrast" | "squint" | "semantic";
-type BackdropMode = "dark" | "light";
+type RenderOptions = {
+  view: ViewMode;
+  overlays: boolean;
+  ambient: boolean;
+};
 
 const scenes = buildVisualScenes();
 const STATIC_RENDER_TIME_MS = 0;
@@ -25,6 +40,9 @@ const inspectionSeed = requiredElement<HTMLInputElement>("inspection-seed");
 const inspectionProfile = requiredElement<HTMLSelectElement>("inspection-profile");
 const inspectionButton = requiredElement<HTMLButtonElement>("inspect-seed");
 const status = requiredElement<HTMLElement>("status");
+const captureStage = requiredElement<HTMLElement>("capture-stage");
+const captureLabel = requiredElement<HTMLElement>("capture-label");
+const captureError = requiredElement<HTMLElement>("capture-error");
 
 let animationFrame = 0;
 
@@ -32,19 +50,6 @@ function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Visual lab element '#${id}' is missing`);
   return element as T;
-}
-
-function clampCellSize(value: number): number {
-  if (!Number.isFinite(value)) return 40;
-  return Math.max(24, Math.min(64, Math.round(value / 2) * 2));
-}
-
-function isViewMode(value: string | null): value is ViewMode {
-  return value === "normal" || value === "grayscale" || value === "contrast" || value === "squint" || value === "semantic";
-}
-
-function isBackdropMode(value: string | null): value is BackdropMode {
-  return value === "dark" || value === "light";
 }
 
 function initializeFromUrl(): void {
@@ -82,10 +87,18 @@ function syncUrl(): void {
   history.replaceState(null, "", `${location.pathname}?${params}`);
 }
 
-function sceneState(scene: VisualScene): RenderState {
-  const diagnostic = viewSelect.value === "semantic";
-  const ambientAnimation = ambientInput.checked;
-  if (overlayInput.checked) return { ...scene.state, terrainDiagnostic: diagnostic, ambientAnimation };
+function interactiveOptions(): RenderOptions {
+  return {
+    view: isViewMode(viewSelect.value) ? viewSelect.value : "normal",
+    overlays: overlayInput.checked,
+    ambient: ambientInput.checked,
+  };
+}
+
+function sceneState(scene: VisualScene, options: RenderOptions): RenderState {
+  const diagnostic = options.view === "semantic";
+  const ambientAnimation = options.ambient;
+  if (options.overlays) return { ...scene.state, terrainDiagnostic: diagnostic, ambientAnimation };
   return {
     ...scene.state,
     terrainDiagnostic: diagnostic,
@@ -120,7 +133,7 @@ function drawScene(scene: VisualScene, resize: boolean, nowMs = motionEnabled() 
   const canvas = canvases.get(scene.id);
   if (!canvas) return;
   if (resize) sizeCanvas(canvas, scene.state, Number(cellInput.value));
-  draw(canvas, sceneState(scene), nowMs);
+  draw(canvas, sceneState(scene, interactiveOptions()), nowMs);
 }
 
 function renderAll(resize = true): void {
@@ -347,7 +360,7 @@ function inspectSeed(): void {
   const generated = buildGeneratedThemeScene(themeId, seed, profile);
   const scene: VisualScene = {
     ...generated,
-    id: "seed-inspection",
+    id: SEED_SCENE_ID,
     title: `Seed inspection · ${generated.title}`,
   };
   const existing = scenes.findIndex((candidate) => candidate.id === scene.id);
@@ -380,19 +393,157 @@ function handleShortcut(event: KeyboardEvent): void {
   }
 }
 
-initializeFromUrl();
-buildSceneCards();
-renderAll();
+// ---------------------------------------------------------------------------
+// Capture mode
+//
+// A single scene, deterministic dimensions, no chrome, one fixed frame
+// timestamp, and an explicit ready flag. Everything the automated pipeline
+// needs and nothing a human toolbar would add.
+// ---------------------------------------------------------------------------
 
-cellInput.addEventListener("input", () => renderAll(true));
-viewSelect.addEventListener("change", () => renderAll(false));
-backdropSelect.addEventListener("change", () => renderAll(false));
-overlayInput.addEventListener("change", () => renderAll(false));
-animateInput.addEventListener("change", () => renderAll(false));
-ambientInput.addEventListener("change", () => renderAll(false));
-inspectionProfile.addEventListener("change", syncUrl);
-exportButton.addEventListener("click", exportContactSheet);
-diagnosticsButton.addEventListener("click", () => void copyDiagnostics());
-inspectionButton.addEventListener("click", inspectSeed);
-document.addEventListener("visibilitychange", updateAnimation);
-window.addEventListener("keydown", handleShortcut);
+const captureCanvas = document.createElement("canvas");
+const generatedSceneCache = new Map<string, VisualScene>();
+
+function captureSceneFor(params: CaptureParams): VisualScene {
+  if (params.sceneId === SEED_SCENE_ID) {
+    const { themeId, profile, seed } = params.inspection;
+    const key = `${themeId}|${profile}|${seed}`;
+    const cached = generatedSceneCache.get(key);
+    if (cached) return cached;
+    const generated = buildGeneratedThemeScene(themeId, seed, profile);
+    const scene: VisualScene = { ...generated, id: SEED_SCENE_ID, title: `Seed inspection · ${generated.title}` };
+    generatedSceneCache.set(key, scene);
+    return scene;
+  }
+  const scene = scenes.find((candidate) => candidate.id === params.sceneId);
+  if (!scene) throw new Error(`Visual lab has no scene '${params.sceneId}'`);
+  return scene;
+}
+
+function captureLabelText(params: CaptureParams, scene: VisualScene): string {
+  const seed = params.sceneId === SEED_SCENE_ID ? ` · ${params.inspection.themeId}/${params.inspection.profile}/${params.inspection.seed}` : "";
+  return `${params.sceneId} · ${scene.state.map.width}×${scene.state.map.height} · ${params.cell}px · ${params.view} · t=${params.timeMs}ms${seed}`;
+}
+
+function setCaptureError(message: string): void {
+  const bridge = window.__CIRCUIT_BORED_VISUAL__;
+  if (bridge) {
+    bridge.ready = false;
+    bridge.error = message;
+  }
+  captureError.hidden = false;
+  captureError.textContent = `Visual capture failed:\n${message}`;
+  captureCanvas.remove();
+  captureLabel.textContent = "";
+  document.body.dataset.visualError = message;
+  delete document.body.dataset.visualReady;
+}
+
+function applyCapture(search: string): void {
+  const bridge = window.__CIRCUIT_BORED_VISUAL__;
+  if (bridge) {
+    bridge.ready = false;
+    bridge.error = null;
+  }
+  delete document.body.dataset.visualReady;
+  delete document.body.dataset.visualError;
+  captureError.hidden = true;
+  captureError.textContent = "";
+
+  const { params, issues } = parseCaptureParams(search);
+  const request: CaptureParams = { ...params, capture: true };
+  const problems = [...issues, ...validateCaptureRequest(request, scenes.map((scene) => scene.id))];
+  if (problems.length > 0) {
+    setCaptureError(problems.join("; "));
+    throw new Error(problems.join("; "));
+  }
+
+  let scene: VisualScene;
+  try {
+    scene = captureSceneFor(request);
+  } catch (error) {
+    setCaptureError(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+
+  document.body.dataset.capture = "1";
+  document.body.dataset.view = request.view;
+  document.body.dataset.backdrop = request.backdrop;
+  // Keep the hidden toolbar consistent so a human can flip capture=0 in the
+  // URL and land on the same configuration in the interactive lab.
+  cellInput.value = String(request.cell);
+  viewSelect.value = request.view;
+  backdropSelect.value = request.backdrop;
+  overlayInput.checked = request.overlays;
+  ambientInput.checked = request.ambient;
+  animateInput.checked = false;
+
+  const state = sceneState(scene, { view: request.view, overlays: request.overlays, ambient: request.ambient });
+  try {
+    if (!captureCanvas.isConnected) captureStage.insertBefore(captureCanvas, captureLabel);
+    captureCanvas.setAttribute("aria-label", scene.title);
+    sizeCanvas(captureCanvas, state, request.cell);
+    if (captureCanvas.width === 0 || captureCanvas.height === 0) {
+      throw new Error(`Canvas for '${request.sceneId}' has zero size at ${request.cell}px`);
+    }
+    draw(captureCanvas, state, request.timeMs);
+  } catch (error) {
+    setCaptureError(error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error));
+    throw error;
+  }
+
+  captureLabel.hidden = !request.label;
+  captureLabel.textContent = request.label ? captureLabelText(request, scene) : "";
+  history.replaceState(null, "", `${location.pathname}?${captureSearchParams(request)}`);
+
+  if (bridge) bridge.ready = true;
+  document.body.dataset.visualReady = "true";
+}
+
+function captureSize(): { width: number; height: number } {
+  const box = captureStage.getBoundingClientRect();
+  return { width: Math.ceil(box.width), height: Math.ceil(box.height) };
+}
+
+function startCaptureMode(search: string): void {
+  const bridge: VisualLabBridge = {
+    version: VISUAL_BRIDGE_VERSION,
+    ready: false,
+    error: null,
+    sceneIds: [...scenes.map((scene) => scene.id), SEED_SCENE_ID],
+    applyCapture,
+    captureSize,
+  };
+  window.__CIRCUIT_BORED_VISUAL__ = bridge;
+  try {
+    applyCapture(search);
+  } catch {
+    // applyCapture has already published the failure through the bridge and
+    // the DOM; rethrowing here would only produce an unhandled rejection.
+  }
+}
+
+function startInteractiveMode(): void {
+  initializeFromUrl();
+  buildSceneCards();
+  renderAll();
+
+  cellInput.addEventListener("input", () => renderAll(true));
+  viewSelect.addEventListener("change", () => renderAll(false));
+  backdropSelect.addEventListener("change", () => renderAll(false));
+  overlayInput.addEventListener("change", () => renderAll(false));
+  animateInput.addEventListener("change", () => renderAll(false));
+  ambientInput.addEventListener("change", () => renderAll(false));
+  inspectionProfile.addEventListener("change", syncUrl);
+  exportButton.addEventListener("click", exportContactSheet);
+  diagnosticsButton.addEventListener("click", () => void copyDiagnostics());
+  inspectionButton.addEventListener("click", inspectSeed);
+  document.addEventListener("visibilitychange", updateAnimation);
+  window.addEventListener("keydown", handleShortcut);
+}
+
+if (parseCaptureParams(location.search).params.capture) {
+  startCaptureMode(location.search);
+} else {
+  startInteractiveMode();
+}

@@ -120,6 +120,45 @@
       footer { margin: 28px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
       kbd { padding: 2px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; color: var(--text); background: var(--panel); font: 700 10px ui-monospace, monospace; }
       .status { min-height: 18px; margin-top: 10px; color: var(--cyan); font: 700 11px ui-monospace, monospace; }
+
+      /*
+        Capture mode. Automation screenshots #capture-stage, so its box has to
+        be a pure function of the requested scene and cell size: no sticky
+        chrome, no scroll containers, no viewport-dependent layout.
+      */
+      body[data-capture="1"] { background: #071018; }
+      body[data-capture="1"] .shell { display: none; }
+      body[data-capture="1"][data-backdrop="light"] { background: #dbe5e8; }
+      #capture-stage { display: none; }
+      body[data-capture="1"] #capture-stage {
+        position: absolute;
+        top: 0;
+        left: 0;
+        display: block;
+        width: max-content;
+        padding: 16px;
+        background: #071018;
+      }
+      body[data-capture="1"][data-backdrop="light"] #capture-stage { background: #dbe5e8; }
+      #capture-stage canvas { box-shadow: none; }
+      #capture-label {
+        width: 100%;
+        height: 22px;
+        margin-top: 10px;
+        overflow: hidden;
+        color: #9fc4d2;
+        font: 400 12px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: nowrap;
+      }
+      body[data-capture="1"][data-backdrop="light"] #capture-label { color: #33505d; }
+      body[data-capture="1"] #capture-label[hidden] { display: none; }
+      #capture-error {
+        max-width: 900px;
+        padding: 16px;
+        color: #ff6677;
+        font: 700 14px/1.5 ui-monospace, monospace;
+        white-space: pre-wrap;
+      }
       @media (max-width: 760px) {
         .shell { padding: 16px; }
         header { grid-template-columns: 1fr; }
@@ -210,7 +249,12 @@
       <div id="status" class="status" role="status" aria-live="polite"></div>
       <footer>
         Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> jump to scenes, <kbd>G</kbd> toggles grayscale, <kbd>S</kbd> toggles Squint mode, and <kbd>E</kbd> exports the contact sheet. URL parameters preserve cell size, seed inspection, and diagnostic settings.
+        Automated capture uses <code>?capture=1&amp;scene=terrain&amp;cell=40&amp;view=normal&amp;time=0</code>; see <code>docs/VISUAL_REVIEW.md</code>.
       </footer>
+    </div>
+    <div id="capture-stage" data-capture-stage>
+      <div id="capture-error" hidden></div>
+      <div id="capture-label"></div>
     </div>
     <script type="module" src="/tools/visual-lab.ts"></script>
   </body>

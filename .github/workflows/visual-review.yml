@@ -1,0 +1,90 @@
+name: Visual review
+
+# Generates the visual-review artifact so renderer changes can be inspected as
+# pixels rather than as a diff. This workflow deliberately never fails on pixel
+# differences and never commits screenshots: deployment must not depend on a
+# subjective visual judgement.
+
+on:
+  pull_request:
+    paths:
+      - "src/render*.ts"
+      - "src/generation*.ts"
+      - "src/environment.ts"
+      - "src/themes.ts"
+      - "tools/**"
+      - "visual-lab.html"
+      - ".github/workflows/visual-review.yml"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Baseline git ref (default: the repository's default branch)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  visual-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The baseline is rendered from a detached worktree at the merge-base,
+          # so the full history has to be present.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          # The pipeline runs TypeScript through Node's built-in type stripping.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Structural visual checks
+        run: npm run check:visual
+
+      - name: Render visual review
+        run: |
+          BASE="${{ inputs.base || github.base_ref }}"
+          if [ -n "$BASE" ]; then
+            git fetch --no-tags origin "$BASE" || true
+            node tools/visual-review.mjs review --base "origin/$BASE"
+          else
+            echo "No base ref available; capturing current output only."
+            node tools/visual-review.mjs capture
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          if [ -f artifacts/visual-review/compare/metrics.json ]; then
+            node -e "
+              const data = require('./artifacts/visual-review/compare/metrics.json');
+              const changed = data.entries.filter((entry) => entry.status === 'changed');
+              changed.sort((a, b) => b.metrics.changedRatio - a.metrics.changedRatio);
+              const lines = ['## Visual review', '', \`\${data.entries.length} captures compared, \${changed.length} changed.\`, ''];
+              if (changed.length > 0) {
+                lines.push('| capture | changed | pixels | mean delta |', '| --- | --- | --- | --- |');
+                for (const entry of changed.slice(0, 20)) {
+                  lines.push(\`| \${entry.path} | \${(entry.metrics.changedRatio * 100).toFixed(2)}% | \${entry.metrics.changedPixels} | \${entry.metrics.meanDifference.toFixed(2)} |\`);
+                }
+                lines.push('', 'A pixel difference is not automatically a regression. Download the artifact and look at the images.');
+              }
+              require('node:fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+            "
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circuit-bored-visual-review
+          path: artifacts/visual-review
+          if-no-files-found: warn
+          retention-days: 14
