@@ -38,3 +38,18 @@ npm run build
 
 The GitHub Pages workflow builds with the repository base path. Gameplay and
 content code intentionally use no external runtime dependencies.
+
+## Visual review
+
+`/visual-lab.html` renders canonical scenes with the production renderer:
+
+```bash
+npm run dev:visual     # interactive laboratory
+npm run visual:review  # headless capture, baseline comparison, and report
+```
+
+`visual:review` drives that lab through a local headless Chromium and writes
+before/current/difference PNGs, difference metrics, and a report into
+`artifacts/visual-review/` (gitignored). It needs Node 22.18+ and a Playwright
+Chromium; see `docs/VISUAL_REVIEW.md`. Visual direction lives in
+`docs/ART_DIRECTION.md`.
