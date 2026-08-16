@@ -1,11 +1,16 @@
 import {
   cloneMap,
   getTile,
-  isPassable,
   unitAt,
   type GameMap,
   type Unit,
 } from "./map.ts";
+import {
+  computeMovementField,
+  movementDestinations,
+  movementPath,
+  type MovementField,
+} from "./movement.ts";
 import { attachTapHandler } from "./input.ts";
 import {
   draw,
@@ -27,7 +32,12 @@ import {
 import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
 import { createAiSession } from "./aiSession.ts";
 import { logReport, validateMap } from "./validation.ts";
-import { movementApCost, resetTurnState } from "./rules.ts";
+import { isSpent, movementApCost, movementRange, resetTurnState } from "./rules.ts";
+
+/** Animation length of a move that covers a single tile. */
+const SINGLE_STEP_MS = 280;
+/** Per-tile animation length inside a multi-tile walk, so long routes read as one move. */
+const MULTI_STEP_MS = 150;
 
 export type Turn = "player" | "enemy";
 export type EncounterOutcome = "victory" | "defeat";
@@ -228,28 +238,22 @@ export function startRuntime(
     }
   };
 
+  // Rebuilt on every redraw, then reused by the tap handler so the tile a
+  // player taps is resolved against exactly the region they were shown.
+  let moveField: MovementField | null = null;
+
   const computeHighlights = () => {
     state.highlights = [];
     state.enemyPreviews = [];
+    state.moveRange = null;
+    moveField = null;
     if (!selected || turn !== "player" || busy) return;
-    const moveCost = movementApCost(selected);
-    if (selected.ap >= moveCost) {
-      const adj = [
-        { x: selected.x + 1, y: selected.y },
-        { x: selected.x - 1, y: selected.y },
-        { x: selected.x, y: selected.y + 1 },
-        { x: selected.x, y: selected.y - 1 },
-      ];
-      for (const c of adj) {
-        if (isPassable(map, c.x, c.y)) {
-          state.highlights.push({
-            x: c.x,
-            y: c.y,
-            fill: "rgba(80, 200, 120, 0.55)",
-            border: "rgba(80, 200, 120, 1)",
-            kind: "move",
-          });
-        }
+    const range = movementRange(selected);
+    if (range > 0) {
+      moveField = computeMovementField(map, selected, range);
+      const tiles = movementDestinations(selected, moveField);
+      if (tiles.length > 0) {
+        state.moveRange = { originX: selected.x, originY: selected.y, tiles };
       }
     }
     if (selected.ap >= 2) {
@@ -262,7 +266,6 @@ export function startRuntime(
           y: u.y,
           fill: "rgba(255, 80, 80, 0.55)",
           border: "rgba(255, 80, 80, 1)",
-          kind: "target",
         });
         state.enemyPreviews.push({
           x: u.x,
@@ -278,7 +281,7 @@ export function startRuntime(
     turnLabel.textContent = turn === "player" ? "Your turn" : "Enemy turn";
     if (selected && selected.hp > 0) {
       const name = selected.displayName ? `${selected.displayName} · ` : "";
-      apLabel.textContent = `${name}HP ${selected.hp}/${selected.maxHp}  AP ${selected.ap}/${selected.maxAp}`;
+      apLabel.textContent = `${name}HP ${selected.hp}/${selected.maxHp}  AP ${selected.ap}/${selected.maxAp}  MOVE ${movementRange(selected)}`;
     } else {
       apLabel.textContent = "No unit selected. Tap one of your units.";
     }
@@ -291,8 +294,7 @@ export function startRuntime(
     enemyLabel.textContent = `Hostiles: ${[...enemyCounts].map(([name, count]) => `${count} ${name}`).join(" · ") || "none"}`;
     endTurnBtn.disabled = turn !== "player" || outcome !== null || busy;
     const livePlayers = map.units.filter((u) => u.team === "player" && u.hp > 0);
-    const allSpent =
-      livePlayers.length > 0 && livePlayers.every((u) => u.ap === 0);
+    const allSpent = livePlayers.length > 0 && livePlayers.every(isSpent);
     const showSpentNudge =
       turn === "player" && outcome === null && !busy && allSpent;
     endTurnBtn.textContent = showSpentNudge ? "End Turn (all spent)" : "End Turn";
@@ -376,6 +378,7 @@ export function startRuntime(
     unit: Unit,
     from: { x: number; y: number },
     to: { x: number; y: number },
+    durationMs = SINGLE_STEP_MS,
   ): MovementEffect => {
     const effect: MovementEffect = {
       id: `move-${movementEffectSequence++}`,
@@ -385,7 +388,7 @@ export function startRuntime(
       toX: to.x,
       toY: to.y,
       startedAt: performance.now(),
-      durationMs: 280,
+      durationMs,
     };
     movementEffects.push(effect);
     return effect;
@@ -436,7 +439,7 @@ export function startRuntime(
       } else {
         addFloating("MISS", tappedUnit.x, tappedUnit.y, "#fff");
       }
-      if (selected.ap <= 0) selected = null;
+      if (isSpent(selected)) selected = null;
       busy = true;
       redraw();
       checkOutcome();
@@ -451,33 +454,56 @@ export function startRuntime(
       return;
     }
 
-    const dx = Math.abs(x - selected.x);
-    const dy = Math.abs(y - selected.y);
-    const moveCost = movementApCost(selected);
-    if (dx + dy === 1 && isPassable(map, x, y) && selected.ap >= moveCost) {
-      const from = { x: selected.x, y: selected.y };
-      selected.x = x;
-      selected.y = y;
-      selected.ap -= moveCost;
-      selected.movesThisTurn = (selected.movesThisTurn ?? 0) + 1;
-      selected.peekExposure = null;
+    // Anywhere inside the shown movement radius is a legal destination; the
+    // unit walks the shortest route there one tile at a time.
+    const path = moveField ? movementPath(moveField, x, y) : [];
+    if (path.length > 0) {
       const mover = selected;
-      const effect = addMovementEffect(mover, from, { x, y });
       busy = true;
-      notifyState();
       redraw();
       void (async () => {
-        await delay(effect.durationMs);
+        await walkPath(mover, path);
         if (cancelled) return;
-        await triggerEnemyOverwatchReactions(mover, from, { x, y });
-        if (cancelled) return;
-        if (mover.ap <= 0 || mover.hp <= 0) selected = null;
+        if (isSpent(mover) || mover.hp <= 0) selected = null;
         busy = false;
         notifyState();
         redraw();
       })();
     }
   });
+
+  /**
+   * Walks `mover` along an already-validated path, one tile per animation
+   * step. AP is charged tile by tile rather than up front so an interrupted
+   * walk never bills the unit for ground it did not cover, and every step is
+   * a separate overwatch trigger just as a single-tile move used to be.
+   */
+  const walkPath = async (mover: Unit, path: { x: number; y: number }[]) => {
+    const stepMs = path.length > 1 ? MULTI_STEP_MS : SINGLE_STEP_MS;
+    for (const step of path) {
+      if (cancelled || mover.hp <= 0) return;
+      const cost = movementApCost(mover);
+      if (mover.ap < cost) return;
+      const occupant = unitAt(map, step.x, step.y);
+      if (occupant && occupant.id !== mover.id) return;
+      const from = { x: mover.x, y: mover.y };
+      mover.x = step.x;
+      mover.y = step.y;
+      mover.ap -= cost;
+      mover.movesThisTurn = (mover.movesThisTurn ?? 0) + 1;
+      mover.peekExposure = null;
+      const effect = addMovementEffect(mover, from, step, stepMs);
+      redraw();
+      await delay(effect.durationMs);
+      if (cancelled) return;
+      await triggerEnemyOverwatchReactions(mover, from, step);
+      if (cancelled) return;
+      // Each completed tile is its own persistence boundary, so quitting
+      // mid-walk saves the encounter exactly where the unit stands.
+      notifyState();
+      if (mover.hp <= 0) return;
+    }
+  };
 
   const triggerOverwatchReactions = async (
     enemy: Unit,
@@ -543,7 +569,7 @@ export function startRuntime(
     for (const enemy of enemies) {
       if (cancelled) return;
       beginEnemyTurn(map, enemy, aiSession);
-      while (enemy.ap > 0 && enemy.hp > 0 && outcome === null) {
+      while (!isSpent(enemy) && enemy.hp > 0 && outcome === null) {
         if (cancelled) return;
         const action = takeEnemyAction(map, enemy, aiSession, random);
         if (action.kind === "wait") break;
@@ -562,7 +588,9 @@ export function startRuntime(
           if (cancelled) return;
           if (outcome !== null) break;
         } else if (action.kind === "move") {
-          const effect = addMovementEffect(enemy, action.from, action.to);
+          // Enemies also walk several tiles per turn now, so each tile gets the
+          // shorter per-step timing instead of a full single-move animation.
+          const effect = addMovementEffect(enemy, action.from, action.to, MULTI_STEP_MS);
           redraw();
           await delay(effect.durationMs);
           if (cancelled) return;

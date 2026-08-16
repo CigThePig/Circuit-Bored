@@ -30,6 +30,13 @@ Lower levels must never obscure higher levels.
 ## Combat-overlay rules
 
 - One cue, one meaning. Target brackets mean the selected unit can shoot.
+- The movement radius is one move diamond per reachable tile. The diamond
+  shrinks and fades with every action point the walk would spend, so size and
+  strength say the same thing: how much of the turn stopping there costs. The
+  ramp is measured against the cheapest and dearest tiles on offer, so it reads
+  the same for a three-point unit and an eight-point one, and its smallest
+  diamond must stay visible at 28 px. The radius covers a large share of the
+  board, so it must stay quieter than units, cover, threat, and target cues.
 - Warning chevrons mean an enemy currently threatens a living player.
 - Clear-shot and covered-shot lines are thin, secondary guides.
 - Overlay graphics must not cover faces, HP, or the weapon silhouette.

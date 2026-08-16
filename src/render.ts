@@ -157,17 +157,37 @@ export type MovementEffect = {
   loop?: boolean;
 };
 
+export type MoveRangeTile = {
+  x: number;
+  y: number;
+  /** Tiles walked from the selected unit. */
+  steps: number;
+  /** AP charged for stopping here. Drives the band shading. */
+  apCost: number;
+};
+
+/**
+ * Every tile the selected unit can walk to this turn, drawn as one shaded
+ * region with a bright outer rim instead of a ring of per-step markers.
+ */
+export type MoveRange = {
+  originX: number;
+  originY: number;
+  tiles: MoveRangeTile[];
+};
+
 export type RenderState = {
   map: GameMap;
   selected: Unit | null;
   /** Hide gameplay UI while keeping the board and unit artwork visible. */
   showUnitUi?: boolean;
+  moveRange?: MoveRange | null;
+  /** Shootable enemies. Walkable tiles belong to `moveRange`, not here. */
   highlights: {
     x: number;
     y: number;
     fill: string;
     border: string;
-    kind?: "move" | "target";
   }[];
   enemyPreviews: EnemyPreview[];
   floatingTexts: FloatingText[];
@@ -276,8 +296,12 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
     drawLandmarkArt(ctx, map, cell, now, { animate: state.ambientAnimation !== false });
   }
 
+  if (state.moveRange && state.moveRange.tiles.length > 0) {
+    drawMoveRange(ctx, cell, state.moveRange);
+  }
+
   for (const h of state.highlights) {
-    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border, h.kind ?? "move");
+    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill);
   }
 
   if (state.sightLines && state.sightLines.length > 0) {
@@ -1254,47 +1278,80 @@ function drawCornerBrackets(
   ctx.stroke();
 }
 
+/**
+ * The move diamond's size and strength as a fraction of the way through the
+ * turn a tile sits. `depth` is 0 for the cheapest reachable tiles and 1 for
+ * the ones that spend the unit's last action point, so the ramp always covers
+ * the same visual range whether the unit has three action points or eight.
+ */
+function moveRangeStep(depth: number): { radius: number; fill: number; edge: number } {
+  const lerp = (near: number, far: number) => near + (far - near) * depth;
+  return {
+    radius: lerp(PALETTE.MOVE_NEAR_RADIUS, PALETTE.MOVE_FAR_RADIUS),
+    fill: lerp(PALETTE.MOVE_NEAR_FILL, PALETTE.MOVE_FAR_FILL),
+    edge: lerp(PALETTE.MOVE_NEAR_EDGE, PALETTE.MOVE_FAR_EDGE),
+  };
+}
+
+/**
+ * Draws one move diamond per reachable tile. The diamond shrinks and fades
+ * with every action point the walk would spend, so a glance reads both "I can
+ * step there" and "that costs most of my turn". The ramp is measured against
+ * the cheapest and dearest tiles actually on offer rather than against fixed
+ * per-point sizes, which keeps the smallest diamond legible for a unit with
+ * many action points and keeps the steps distinct for a unit with few.
+ */
+function drawMoveRange(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  range: MoveRange,
+): void {
+  let cheapest = Infinity;
+  let dearest = -Infinity;
+  for (const tile of range.tiles) {
+    cheapest = Math.min(cheapest, tile.apCost);
+    dearest = Math.max(dearest, tile.apCost);
+  }
+  const span = Math.max(1, dearest - cheapest);
+
+  ctx.save();
+  ctx.fillStyle = PALETTE.MOVE_RANGE;
+  ctx.strokeStyle = PALETTE.MOVE_RANGE;
+  ctx.lineWidth = Math.max(0.8, cell * 0.03);
+  for (const tile of range.tiles) {
+    const step = moveRangeStep((tile.apCost - cheapest) / span);
+    const radius = cell * step.radius;
+    const cx = tile.x * cell + cell / 2;
+    const cy = tile.y * cell + cell / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - radius);
+    ctx.lineTo(cx + radius, cy);
+    ctx.lineTo(cx, cy + radius);
+    ctx.lineTo(cx - radius, cy);
+    ctx.closePath();
+    ctx.globalAlpha = step.fill;
+    ctx.fill();
+    ctx.globalAlpha = step.edge;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Ground shadow marking a unit the selected shooter can hit. */
 function drawHighlight(
   ctx: CanvasRenderingContext2D,
   px: number,
   py: number,
   cell: number,
   fill: string,
-  border: string,
-  kind: "move" | "target",
 ): void {
   ctx.save();
-  ctx.globalAlpha = kind === "target" ? 0.08 : PALETTE.HL_FILL_OPACITY;
+  ctx.globalAlpha = 0.08;
   ctx.fillStyle = fill;
-  const inset = kind === "target" ? cell * 0.14 : cell * 0.20;
-  if (kind === "target") {
-    ctx.beginPath();
-    ctx.ellipse(px + cell / 2, py + cell * 0.66, cell * 0.34, cell * 0.17, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(px + cell / 2, py + inset);
-    ctx.lineTo(px + cell - inset, py + cell / 2);
-    ctx.lineTo(px + cell / 2, py + cell - inset);
-    ctx.lineTo(px + inset, py + cell / 2);
-    ctx.closePath();
-    ctx.fill();
-  }
+  ctx.beginPath();
+  ctx.ellipse(px + cell / 2, py + cell * 0.66, cell * 0.34, cell * 0.17, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
-
-  if (kind === "move") {
-    ctx.strokeStyle = border;
-    ctx.globalAlpha = 0.72;
-    ctx.lineWidth = Math.max(1, cell * 0.035);
-    ctx.beginPath();
-    ctx.moveTo(px + cell / 2, py + inset);
-    ctx.lineTo(px + cell - inset, py + cell / 2);
-    ctx.lineTo(px + cell / 2, py + cell - inset);
-    ctx.lineTo(px + inset, py + cell / 2);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
 }
 
 function drawSightLine(

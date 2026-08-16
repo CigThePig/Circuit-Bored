@@ -67,8 +67,19 @@ export const PALETTE = {
   PIP_EMPTY_STROKE: "rgba(220, 230, 240, 0.55)",
   PIP_OUTLINE: "rgba(0, 0, 0, 0.7)",
 
-  HL_FILL_OPACITY: 0.22,
   HL_BRACKET_LEN: 0.22,
+
+  // Movement radius. One diamond per walkable tile; its size and strength fall
+  // off with the action points the walk would spend, from the cheapest tiles
+  // on offer (NEAR) to the ones that end the turn (FAR). Radii are fractions
+  // of a cell: FAR stays above two pixels at the 28 px mobile minimum.
+  MOVE_RANGE: "#50c878",
+  MOVE_NEAR_RADIUS: 0.32,
+  MOVE_FAR_RADIUS: 0.13,
+  MOVE_NEAR_FILL: 0.28,
+  MOVE_FAR_FILL: 0.13,
+  MOVE_NEAR_EDGE: 0.8,
+  MOVE_FAR_EDGE: 0.34,
 
   SIGHT_CLEAR_OUTER: "rgba(90, 214, 255, 0.14)",
   SIGHT_CLEAR_INNER: "rgba(128, 229, 255, 0.72)",

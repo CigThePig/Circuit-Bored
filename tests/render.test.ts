@@ -7,6 +7,7 @@ import {
   MAX_ACCENT_INTENSITY,
 } from "../src/renderLandmarks.ts";
 import { LANDMARK_KINDS, type MapEnvironment } from "../src/environment.ts";
+import { PALETTE } from "../src/renderPalette.ts";
 import { createEmptyMap, setTile, type GameMap } from "../src/map.ts";
 import { generateEncounter } from "../src/generation.ts";
 import { createRun } from "../src/run.ts";
@@ -64,6 +65,65 @@ function recordingContext(): {
     },
   }) as unknown as CanvasRenderingContext2D;
   return { ctx, calls, clipGroups };
+}
+
+type CapturedDiamond = {
+  centre: { x: number; y: number };
+  radius: number;
+  fill: number;
+  edge: number;
+};
+
+/**
+ * Draws a movement radius onto a bare floor board and reads back the diamond
+ * each tile produced, in draw order.
+ */
+function captureMoveDiamonds(
+  tiles: { x: number; y: number; steps: number; apCost: number }[],
+  cell: number,
+): CapturedDiamond[] {
+  const width = Math.max(...tiles.map((tile) => tile.x)) + 2;
+  const height = Math.max(...tiles.map((tile) => tile.y)) + 2;
+  const map = createEmptyMap();
+  map.width = width;
+  map.height = height;
+  map.tiles = new Array(width * height).fill("floor");
+  const { ctx, calls } = recordingContext();
+  const canvas = {
+    style: { width: `${width * cell}px`, height: `${height * cell}px` },
+    width: width * cell,
+    height: height * cell,
+    getContext: () => ctx,
+  } as unknown as HTMLCanvasElement;
+  draw(canvas, {
+    map,
+    selected: null,
+    moveRange: { originX: 0, originY: 0, tiles },
+    highlights: [],
+    enemyPreviews: [],
+    floatingTexts: [],
+  }, 0);
+
+  const start = calls.indexOf(`fillStyle=${PALETTE.MOVE_RANGE}`);
+  expect(start).toBeGreaterThan(-1);
+  const number = "(-?[\\d.]+)";
+  const out: CapturedDiamond[] = [];
+  for (let i = start; i < calls.length; i++) {
+    const top = new RegExp(`^moveTo\\(${number},${number}\\)$`).exec(calls[i]);
+    const right = new RegExp(`^lineTo\\(${number},${number}\\)$`).exec(calls[i + 1] ?? "");
+    if (!top || !right) continue;
+    const alphas = calls
+      .slice(i, i + 12)
+      .filter((call) => call.startsWith("globalAlpha="))
+      .map((call) => Number(call.slice("globalAlpha=".length)));
+    out.push({
+      centre: { x: Number(top[1]), y: Number(right[2]) },
+      radius: Number(right[1]) - Number(top[1]),
+      fill: alphas[0],
+      edge: alphas[1],
+    });
+  }
+  return out;
 }
 
 function landmarkFixture(kindIndex: number): { map: GameMap; environment: MapEnvironment } {
@@ -245,6 +305,95 @@ describe("procedural environment art", () => {
     const { ctx, calls } = recordingContext();
     expect(() => drawLandmarkArt(ctx, legacy, 40, 0)).not.toThrow();
     expect(calls).toHaveLength(0);
+  });
+
+  it("draws one move diamond per reachable tile, shrinking as the walk costs more", () => {
+    const cell = 40;
+    const tiles = [
+      { x: 2, y: 1, steps: 1, apCost: 1 },
+      { x: 1, y: 2, steps: 1, apCost: 1 },
+      { x: 3, y: 2, steps: 2, apCost: 1 },
+      { x: 2, y: 3, steps: 3, apCost: 2 },
+      { x: 0, y: 2, steps: 5, apCost: 3 },
+    ];
+    const diamonds = captureMoveDiamonds(tiles, cell);
+
+    expect(diamonds).toHaveLength(tiles.length);
+    // The diamond keeps its shape and its tile centre; only its size changes.
+    for (const diamond of diamonds) {
+      const tile = tiles[diamonds.indexOf(diamond)];
+      expect(diamond.centre).toEqual({ x: tile.x * cell + cell / 2, y: tile.y * cell + cell / 2 });
+    }
+    const radiusFor = (apCost: number) =>
+      diamonds[tiles.findIndex((tile) => tile.apCost === apCost)].radius;
+    expect(radiusFor(1)).toBeGreaterThan(radiusFor(2));
+    expect(radiusFor(2)).toBeGreaterThan(radiusFor(3));
+    expect(radiusFor(1)).toBeCloseTo(cell * PALETTE.MOVE_NEAR_RADIUS, 5);
+    expect(radiusFor(3)).toBeCloseTo(cell * PALETTE.MOVE_FAR_RADIUS, 5);
+    // Fill and outline fade along the same ramp the size follows.
+    const fillFor = (apCost: number) =>
+      diamonds[tiles.findIndex((tile) => tile.apCost === apCost)].fill;
+    expect(fillFor(1)).toBeGreaterThan(fillFor(2));
+    expect(fillFor(2)).toBeGreaterThan(fillFor(3));
+  });
+
+  it("keeps the ramp legible whether a unit has few action points or many", () => {
+    const cell = 28;
+    const ramps = [3, 5, 8].map((maxAp) => {
+      const tiles = Array.from({ length: maxAp }, (_, i) => ({
+        x: i + 1,
+        y: 1,
+        steps: (i + 1) * 2,
+        apCost: i + 1,
+      }));
+      return captureMoveDiamonds(tiles, cell).map((diamond) => diamond.radius);
+    });
+
+    for (const radii of ramps) {
+      // Every ramp spans the same range, so the cheapest tile always reads as
+      // the biggest diamond and the last one stays visible at the 28 px
+      // mobile minimum instead of collapsing to a dot.
+      expect(radii[0]).toBeCloseTo(cell * PALETTE.MOVE_NEAR_RADIUS, 5);
+      expect(radii[radii.length - 1]).toBeCloseTo(cell * PALETTE.MOVE_FAR_RADIUS, 5);
+      expect(radii[radii.length - 1]).toBeGreaterThan(2);
+      for (let i = 1; i < radii.length; i++) {
+        expect(radii[i]).toBeLessThan(radii[i - 1]);
+      }
+    }
+  });
+
+  it("gives a free first move the full-strength diamond", () => {
+    // ghost_step makes the opening tiles cost nothing; they must read as the
+    // cheapest band rather than sharing a size with one-point tiles.
+    const diamonds = captureMoveDiamonds([
+      { x: 1, y: 1, steps: 1, apCost: 0 },
+      { x: 2, y: 1, steps: 3, apCost: 1 },
+    ], 40);
+    expect(diamonds[0].radius).toBeGreaterThan(diamonds[1].radius);
+    expect(diamonds[0].radius).toBeCloseTo(40 * PALETTE.MOVE_NEAR_RADIUS, 5);
+  });
+
+  it("leaves the board untouched when there is no movement radius", () => {
+    const map = createEmptyMap();
+    map.width = 3;
+    map.height = 3;
+    map.tiles = new Array(9).fill("floor");
+    const { ctx, calls } = recordingContext();
+    const canvas = {
+      style: { width: "120px", height: "120px" },
+      width: 120,
+      height: 120,
+      getContext: () => ctx,
+    } as unknown as HTMLCanvasElement;
+    draw(canvas, {
+      map,
+      selected: null,
+      moveRange: { originX: 1, originY: 1, tiles: [] },
+      highlights: [],
+      enemyPreviews: [],
+      floatingTexts: [],
+    }, 0);
+    expect(calls).not.toContain(`fillStyle=${PALETTE.MOVE_RANGE}`);
   });
 
   it("keeps 24x24 encounters at the documented 28 px readable minimum", () => {
