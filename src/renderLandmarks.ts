@@ -155,6 +155,32 @@ function solidClusters(map: GameMap, rect: MapRect): Cluster[] {
 }
 
 /**
+ * Whether a mass reaches the edge of its own footprint. A containment ring, a
+ * compartment shell, and a corridor wall all do; a core pillar and an interior
+ * rack never do. Classifying by contact rather than by size survives board
+ * mirroring, rotation, and connectivity repairs, all of which change how many
+ * tiles a mass has and whether it stays in one piece.
+ */
+function touchesPerimeter(cluster: Cluster, rect: MapRect): boolean {
+  return cluster.x <= rect.x ||
+    cluster.y <= rect.y ||
+    cluster.x + cluster.width >= rect.x + rect.width ||
+    cluster.y + cluster.height >= rect.y + rect.height;
+}
+
+/** The interior mass nearest the middle of a footprint, if the feature has one. */
+function interiorCore(clusters: readonly Cluster[], rect: MapRect): Cluster | undefined {
+  const centreX = rect.x + rect.width / 2;
+  const centreY = rect.y + rect.height / 2;
+  return clusters
+    .filter((cluster) => !touchesPerimeter(cluster, rect))
+    .sort((a, b) =>
+      Math.hypot(a.x + a.width / 2 - centreX, a.y + a.height / 2 - centreY) -
+      Math.hypot(b.x + b.width / 2 - centreX, b.y + b.height / 2 - centreY)
+    )[0];
+}
+
+/**
  * Clips to the wall tiles of a footprint, minus the raised lip that the tile
  * renderer draws on every edge facing walkable space. Artwork therefore lands
  * on the *top face* of the structure: the bright player-facing lip and the
@@ -192,10 +218,15 @@ function drawContactShadow(
   map: GameMap,
   rect: MapRect,
   cell: number,
+  importance: LandmarkImportance,
 ): void {
+  // Shadow length is the only cue that separates a dominant mass from ordinary
+  // structure without changing anyone's value. A deeper shadow reads as a
+  // taller object, which is what makes the anchor win the eye at squint.
+  const scale = importance === "dominant" ? 1.9 : importance === "major" ? 1.35 : 1;
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.30)";
-  const depth = Math.max(1, cell * 0.16);
+  ctx.fillStyle = importance === "dominant" ? "rgba(0, 0, 0, 0.42)" : "rgba(0, 0, 0, 0.30)";
+  const depth = Math.max(1, cell * 0.16 * scale);
   for (let y = rect.y; y < rect.y + rect.height; y++) {
     for (let x = rect.x; x < rect.x + rect.width; x++) {
       if (getTile(map, x, y) !== "wall") continue;
@@ -274,12 +305,35 @@ function capsule(brush: Brush, area: MapRect, fill: string, rim: string): void {
   ctx.stroke();
 }
 
+/**
+ * The luminance ceiling for environmental accents.
+ *
+ * Every glow in this module goes through `glowDot`, and every one of them is
+ * atmosphere: level 5 of the hierarchy in `docs/ART_DIRECTION.md`. Units and
+ * action cues are levels 2 and 3, so an ambient light that renders brighter
+ * than a unit inverts the hierarchy — which is exactly what happened before
+ * this ceiling existed, measured on the review captures. The cap is applied
+ * here rather than at each call site so a new landmark family cannot
+ * reintroduce the problem by picking a light colour.
+ */
+export const MAX_ACCENT_INTENSITY = 0.5;
+
+/**
+ * Clamps an ambient accent to the luminance ceiling. Exported so the rule can
+ * be asserted directly; whether a given frame actually respects it is a
+ * question for `npm run visual:review`, not for a structural test.
+ */
+export function accentIntensity(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(MAX_ACCENT_INTENSITY, value));
+}
+
 function glowDot(brush: Brush, tileX: number, tileY: number, radius: number, color: string, intensity: number): void {
   const { ctx, cell } = brush;
   ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, intensity));
+  ctx.globalAlpha = accentIntensity(intensity);
   ctx.shadowColor = color;
-  ctx.shadowBlur = cell * 0.4;
+  ctx.shadowBlur = cell * 0.26;
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.arc(px(brush, tileX), px(brush, tileY), radius * cell, 0, Math.PI * 2);
@@ -294,8 +348,9 @@ function chevronBand(brush: Brush, area: MapRect, horizontal: boolean, offset: n
   ctx.beginPath();
   ctx.rect(px(brush, area.x), px(brush, area.y), area.width * cell, area.height * cell);
   ctx.clip();
-  // Warning paint is worn, not fluorescent: it must never out-value a unit.
-  ctx.globalAlpha = 0.52;
+  // Warning paint is worn, not fluorescent: it must never out-value a unit in
+  // grayscale, so the band is both translucent and darkened toward the plate.
+  ctx.globalAlpha = 0.42;
   const step = 0.9;
   const span = (horizontal ? area.width : area.height) + step * 2;
   for (let index = -2; index * step < span; index++) {
@@ -316,6 +371,9 @@ function chevronBand(brush: Brush, area: MapRect, horizontal: boolean, offset: n
     ctx.closePath();
     ctx.fill();
   }
+  ctx.globalAlpha = 0.34;
+  ctx.fillStyle = "rgba(6, 10, 14, 1)";
+  ctx.fillRect(px(brush, area.x), px(brush, area.y), area.width * brush.cell, area.height * brush.cell);
   ctx.restore();
 }
 
@@ -474,12 +532,18 @@ function drawFurnace(brush: Brush): void {
     const cy = anchor.y + inward;
     const width = horizontal ? 0.7 : 1.7;
     const height = horizontal ? 1.7 : 0.7;
+    // Heat is carried by hue and saturation, not by luminance. A white-hot
+    // core reads brighter than a unit in grayscale and squint, which would put
+    // atmosphere above gameplay in the readability hierarchy.
+    // Heat is carried by hue and saturation, never by luminance. Measured
+    // against the unit lineup, environmental accents have to stay below the
+    // brightest unit pixel or atmosphere outranks gameplay at squint.
     brush.ctx.save();
-    brush.ctx.shadowColor = "#ff7a2a";
-    brush.ctx.shadowBlur = brush.cell * (0.8 + pulse * 1.4);
-    brush.ctx.fillStyle = `rgba(255, ${Math.round(96 + pulse * 96)}, 34, ${0.62 + pulse * 0.35})`;
+    brush.ctx.shadowColor = "rgba(150, 56, 14, 0.7)";
+    brush.ctx.shadowBlur = brush.cell * (0.3 + pulse * 0.35);
+    brush.ctx.fillStyle = `rgba(146, ${Math.round(44 + pulse * 22)}, 12, ${0.78 + pulse * 0.18})`;
     brush.ctx.fillRect(px(brush, cx - width / 2), px(brush, cy - height / 2), width * brush.cell, height * brush.cell);
-    brush.ctx.fillStyle = `rgba(255, 240, 200, ${0.24 + pulse * 0.5})`;
+    brush.ctx.fillStyle = `rgba(182, ${Math.round(74 + pulse * 20)}, 24, ${0.6 + pulse * 0.3})`;
     brush.ctx.fillRect(
       px(brush, cx - width * 0.28),
       px(brush, cy - height * 0.28),
@@ -712,15 +776,15 @@ function drawRackCluster(brush: Brush, cluster: Cluster, index: number, density:
 
 function drawServerVault(brush: Brush): void {
   const { palette, orientation, pulse } = brush;
-  // A doored compartment splits into several boundary masses, so "the shell"
-  // is every large piece, not just the biggest one.
-  const shellTiles = Math.max(4, Math.round(brush.clusters[0]?.tiles ?? 0) / 3);
+  // A doored compartment splits into several boundary masses, and a mirrored
+  // board can make an interior rack larger than a shell fragment. Contact with
+  // the footprint edge is the only reliable separator.
   for (const [index, cluster] of brush.clusters.entries()) {
-    if (cluster.tiles >= shellTiles) continue;
+    if (touchesPerimeter(cluster, brush.rect)) continue;
     drawRackCluster(brush, cluster, index, 0.9);
   }
   for (const cluster of brush.clusters) {
-    if (cluster.tiles < shellTiles) continue;
+    if (!touchesPerimeter(cluster, brush.rect)) continue;
     // Armoured containment: doubled plate with a fine structural grid.
     body(brush, cluster, palette.wallMid, 0.04);
     outline(brush, cluster, "rgba(215,242,248,.30)", 0.06);
@@ -756,16 +820,10 @@ function drawServerVault(brush: Brush): void {
 
 function drawDataCore(brush: Brush): void {
   const { palette, pulse, drift } = brush;
-  // The containment ring breaks into cardinal segments, so the core is found
-  // by position and compactness rather than by being the second mass.
-  const centreX = brush.rect.x + brush.rect.width / 2;
-  const centreY = brush.rect.y + brush.rect.height / 2;
-  const core = brush.clusters
-    .filter((cluster) => cluster.width <= 3 && cluster.height <= 3)
-    .sort((a, b) =>
-      Math.hypot(a.x + a.width / 2 - centreX, a.y + a.height / 2 - centreY) -
-      Math.hypot(b.x + b.width / 2 - centreX, b.y + b.height / 2 - centreY)
-    )[0];
+  // The containment ring breaks into cardinal segments, and board mirroring
+  // can widen the pillar past any fixed size cap, so the core is whichever
+  // mass sits clear of the footprint edge.
+  const core = interiorCore(brush.clusters, brush.rect);
   for (const cluster of brush.clusters) {
     if (cluster === core) continue;
     body(brush, cluster, palette.wallMid, 0.06);
@@ -789,8 +847,8 @@ function drawDataCore(brush: Brush): void {
     brush.ctx.stroke();
   }
   brush.ctx.restore();
-  glowDot(brush, cx, cy, 0.28, palette.coolant, 0.45 + pulse * 0.4);
-  glowDot(brush, cx, cy, 0.13, "#ffffff", 0.35 + pulse * 0.35);
+  // One light, not two stacked: overlapping glows composite well past the cap.
+  glowDot(brush, cx, cy, 0.26, palette.coolant, 0.22 + pulse * 0.16);
 }
 
 function drawSecurityCheckpoint(brush: Brush): void {
@@ -812,24 +870,29 @@ function drawSecurityCheckpoint(brush: Brush): void {
       );
     } else {
       ribs(brush, cluster, !horizontal, 0.9, "rgba(0,0,0,.36)", 0.05);
-      chevronBand(brush, horizontal
-        ? { x: cluster.x, y: cluster.y + cluster.height - 0.3, width: cluster.width, height: 0.3 }
-        : { x: cluster.x + cluster.width - 0.3, y: cluster.y, width: 0.3, height: cluster.height },
-        horizontal, 0);
-      // Scanner slots facing the approach.
+      // A checkpoint is identified by its threshold, so the hazard banding and
+      // the scanner heads concentrate at the end of the run that meets the
+      // gate rather than running the full length of the wall.
+      const gateAtStart = horizontal
+        ? cluster.x > brush.rect.x
+        : cluster.y > brush.rect.y;
+      const reach = Math.min(2.5, (horizontal ? cluster.width : cluster.height));
+      const threshold: MapRect = horizontal
+        ? { x: gateAtStart ? cluster.x : cluster.x + cluster.width - reach, y: cluster.y + cluster.height - 0.34, width: reach, height: 0.34 }
+        : { x: cluster.x + cluster.width - 0.34, y: gateAtStart ? cluster.y : cluster.y + cluster.height - reach, width: 0.34, height: reach };
+      chevronBand(brush, threshold, horizontal, 0);
       brush.ctx.save();
       brush.ctx.globalAlpha = 0.6;
       brush.ctx.fillStyle = palette.wallScreen;
-      const count = Math.max(1, Math.floor((horizontal ? cluster.width : cluster.height) / 2));
-      for (let index = 0; index < count; index++) {
-        const fraction = (index + 0.5) / count;
-        if (horizontal) {
-          brush.ctx.fillRect(px(brush, cluster.x + cluster.width * fraction - 0.3), px(brush, cluster.y + 0.22), 0.6 * brush.cell, 0.24 * brush.cell);
-        } else {
-          brush.ctx.fillRect(px(brush, cluster.x + 0.22), px(brush, cluster.y + cluster.height * fraction - 0.3), 0.24 * brush.cell, 0.6 * brush.cell);
-        }
-      }
+      const headX = horizontal
+        ? (gateAtStart ? cluster.x + 0.5 : cluster.x + cluster.width - 0.5)
+        : cluster.x + cluster.width * 0.5;
+      const headY = horizontal
+        ? cluster.y + cluster.height * 0.5
+        : (gateAtStart ? cluster.y + 0.5 : cluster.y + cluster.height - 0.5);
+      brush.ctx.fillRect(px(brush, headX - 0.3), px(brush, headY - 0.22), 0.6 * brush.cell, 0.44 * brush.cell);
       brush.ctx.restore();
+      glowDot(brush, headX, headY, 0.07, blink ? "#ff5a6e" : palette.wallLight, blink ? 0.8 : 0.2);
     }
   }
 }
@@ -1003,7 +1066,7 @@ function drawWreckedMachinery(brush: Brush): void {
     if (index === 0) {
       // A short-circuit that arcs occasionally instead of glowing constantly.
       glowDot(brush, tear.x + tear.width * 0.5, tear.y + tear.height * 0.5, blink ? 0.15 : 0.05,
-        blink ? "#eaf4ff" : palette.wallLight, blink ? 0.95 : pulse * 0.3);
+        blink ? "#cfe0ee" : palette.wallLight, blink ? 0.5 : pulse * 0.3);
     }
   }
 }
@@ -1091,7 +1154,7 @@ function drawSalvageRig(brush: Brush): void {
 
 function drawReactorWreck(brush: Brush): void {
   const { palette, variant, pulse } = brush;
-  const core = brush.clusters.find((cluster) => cluster.tiles <= 12 && cluster.width <= 3 && cluster.height <= 3);
+  const core = interiorCore(brush.clusters, brush.rect);
   for (const [index, cluster] of brush.clusters.entries()) {
     if (cluster === core) continue;
     // The shell survives in fragments, each one cracked along its length.
@@ -1192,7 +1255,7 @@ export function drawLandmarkArt(
       drift: ambient.drift,
       noise: (index: number) => hashNoise(seed + index, landmark.rect.x * 31 + landmark.rect.y),
     };
-    drawContactShadow(ctx, map, landmark.rect, cell);
+    drawContactShadow(ctx, map, landmark.rect, cell, landmark.importance);
     ctx.save();
     if (clipSolid(ctx, map, landmark.rect, cell)) draw(brush);
     ctx.restore();

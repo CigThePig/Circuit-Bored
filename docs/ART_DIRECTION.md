@@ -53,6 +53,12 @@ Lower levels must never obscure higher levels.
   footprint, so the object always lines up with the geometry the generator
   produced. Face detail (a furnace mouth, a vault door) anchors to real
   structure and never lands in a doorway.
+- **Classify a landmark's masses by contact with its own footprint edge, never
+  by tile count.** A shell, a containment ring, and a corridor wall all reach
+  the edge; a core pillar and an interior rack never do. Board mirroring,
+  rotation, and connectivity repairs all change how large a mass is and whether
+  it stays in one piece, so any size threshold silently drops artwork on real
+  generated boards while still looking correct in a hand-built gallery.
 
 ## Ambient motion
 
@@ -65,6 +71,14 @@ Lower levels must never obscure higher levels.
   landmark's id, so a given frame always renders identically.
 - Ambient motion never encodes gameplay state. If a cue matters tactically it
   belongs to the overlay layer, not to environmental art.
+- **Environmental light is capped below unit value.** Heat, coolant, and data
+  glows carry their meaning through hue and saturation, never through
+  luminance. Every glow in `renderLandmarks.ts` passes through one clamp
+  (`MAX_ACCENT_INTENSITY`), because an ambient light that renders brighter than
+  a unit puts atmosphere above gameplay in the hierarchy above. Verify it by
+  measuring a review capture against the unit lineup, not by eye.
+- Two glows must not stack on the same point. Overlapping alphas composite well
+  past the cap even when each one respects it.
 
 ## Feature hierarchy
 

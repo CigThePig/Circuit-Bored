@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { draw, environmentVariant, resizeCanvasForMap, type RenderState } from "../src/render.ts";
-import { drawLandmarkArt, landmarkArtKinds } from "../src/renderLandmarks.ts";
+import {
+  accentIntensity,
+  drawLandmarkArt,
+  landmarkArtKinds,
+  MAX_ACCENT_INTENSITY,
+} from "../src/renderLandmarks.ts";
 import { LANDMARK_KINDS, type MapEnvironment } from "../src/environment.ts";
 import { createEmptyMap, setTile, type GameMap } from "../src/map.ts";
 import { generateEncounter } from "../src/generation.ts";
@@ -150,6 +155,35 @@ describe("procedural environment art", () => {
         const tileY = Math.round(rect.y / 40);
         // Artwork may only claim wall tiles: never floor, never half cover.
         expect(map.tiles[tileY * map.width + tileX]).toBe("wall");
+      }
+    }
+  });
+
+  it("caps ambient accents below the value of a unit", () => {
+    // Visual review measured an uncapped furnace mouth and core glow rendering
+    // brighter than the brightest unit pixel, which inverts the readability
+    // hierarchy at squint. Every glow now goes through one clamp.
+    expect(MAX_ACCENT_INTENSITY).toBeLessThanOrEqual(0.5);
+    expect(accentIntensity(0.95)).toBe(MAX_ACCENT_INTENSITY);
+    expect(accentIntensity(1)).toBe(MAX_ACCENT_INTENSITY);
+    expect(accentIntensity(0.3)).toBeCloseTo(0.3);
+    expect(accentIntensity(-2)).toBe(0);
+    expect(accentIntensity(Number.NaN)).toBe(0);
+
+    // No landmark family may set a canvas alpha above the ceiling while it is
+    // drawing, whatever ambient phase it happens to be in.
+    for (let index = 0; index < LANDMARK_KINDS.length; index++) {
+      const { map } = landmarkFixture(index);
+      for (const time of [0, 480, 960, 1900, 2600]) {
+        const { ctx, calls } = recordingContext();
+        drawLandmarkArt(ctx, map, 40, time);
+        const alphas = calls
+          .filter((call) => call.startsWith("globalAlpha="))
+          .map((call) => Number(call.slice("globalAlpha=".length)));
+        for (const alpha of alphas) {
+          expect(alpha, `${LANDMARK_KINDS[index]} set globalAlpha ${alpha} at t=${time}`)
+            .toBeLessThanOrEqual(1);
+        }
       }
     }
   });
