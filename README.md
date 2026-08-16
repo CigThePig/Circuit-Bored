@@ -5,8 +5,9 @@ line of sight, corner peeking, committed exposure, and overwatch.
 
 ## Movement
 
-Units walk in eight directions. Selecting a unit shows every tile it can reach
-this turn, shaded by the action points the walk would spend; tapping any tile
+Units walk in eight directions. Selecting a unit marks every tile it can reach
+this turn with a diamond that shrinks as the walk spends more action points;
+tapping any tile
 in that region walks the whole route, one tile at a time, with overwatch
 resolved at each tile. One action point buys `TILES_PER_MOVE_AP` tiles of
 travel (`src/rules.ts`), so a turn covers twice the ground of a turn where

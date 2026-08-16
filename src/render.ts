@@ -1,4 +1,4 @@
-import { getTile, isPassable, type GameMap, type Unit } from "./map.ts";
+import { getTile, type GameMap, type Unit } from "./map.ts";
 import { floorTreatmentAt, type FloorTreatmentZone } from "./environment.ts";
 import { drawLandmarkArt } from "./renderLandmarks.ts";
 import {
@@ -297,7 +297,7 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
   }
 
   if (state.moveRange && state.moveRange.tiles.length > 0) {
-    drawMoveRange(ctx, map, cell, state.moveRange);
+    drawMoveRange(ctx, cell, state.moveRange);
   }
 
   for (const h of state.highlights) {
@@ -1279,80 +1279,59 @@ function drawCornerBrackets(
 }
 
 /**
- * Paints the reachable region as a shaded grid: one cell per walkable tile,
- * shaded by the AP the walk costs, with a bright rim where the turn's travel
- * runs out and a faint seam where the next action point starts. The rim is
- * only drawn against ground the unit could otherwise have stood on: walls,
- * cover, and occupied tiles already draw their own edges, and outlining them
- * again would ring every enemy inside the region in movement green.
+ * The move diamond's size and strength as a fraction of the way through the
+ * turn a tile sits. `depth` is 0 for the cheapest reachable tiles and 1 for
+ * the ones that spend the unit's last action point, so the ramp always covers
+ * the same visual range whether the unit has three action points or eight.
+ */
+function moveRangeStep(depth: number): { radius: number; fill: number; edge: number } {
+  const lerp = (near: number, far: number) => near + (far - near) * depth;
+  return {
+    radius: lerp(PALETTE.MOVE_NEAR_RADIUS, PALETTE.MOVE_FAR_RADIUS),
+    fill: lerp(PALETTE.MOVE_NEAR_FILL, PALETTE.MOVE_FAR_FILL),
+    edge: lerp(PALETTE.MOVE_NEAR_EDGE, PALETTE.MOVE_FAR_EDGE),
+  };
+}
+
+/**
+ * Draws one move diamond per reachable tile. The diamond shrinks and fades
+ * with every action point the walk would spend, so a glance reads both "I can
+ * step there" and "that costs most of my turn". The ramp is measured against
+ * the cheapest and dearest tiles actually on offer rather than against fixed
+ * per-point sizes, which keeps the smallest diamond legible for a unit with
+ * many action points and keeps the steps distinct for a unit with few.
  */
 function drawMoveRange(
   ctx: CanvasRenderingContext2D,
-  map: GameMap,
   cell: number,
   range: MoveRange,
 ): void {
-  const bands = PALETTE.MOVE_RANGE_BAND_OPACITY;
-  const costs = new Map<string, number>();
+  let cheapest = Infinity;
+  let dearest = -Infinity;
   for (const tile of range.tiles) {
-    costs.set(`${tile.x},${tile.y}`, Math.max(1, tile.apCost));
+    cheapest = Math.min(cheapest, tile.apCost);
+    dearest = Math.max(dearest, tile.apCost);
   }
+  const span = Math.max(1, dearest - cheapest);
 
   ctx.save();
-  const inset = Math.max(0.5, cell * 0.09);
-  const side = cell - inset * 2;
   ctx.fillStyle = PALETTE.MOVE_RANGE;
+  ctx.strokeStyle = PALETTE.MOVE_RANGE;
+  ctx.lineWidth = Math.max(0.8, cell * 0.03);
   for (const tile of range.tiles) {
-    const band = Math.min(bands.length, Math.max(1, tile.apCost)) - 1;
-    ctx.globalAlpha = bands[band];
-    ctx.fillRect(tile.x * cell + inset, tile.y * cell + inset, side, side);
-  }
-  ctx.restore();
-
-  // One outline per cell keeps the region legible as a grid of steppable
-  // tiles: the player is choosing a tile, not painting an area.
-  ctx.save();
-  ctx.strokeStyle = PALETTE.MOVE_RANGE_CELL_EDGE;
-  ctx.lineWidth = Math.max(0.5, cell * 0.02);
-  ctx.beginPath();
-  for (const tile of range.tiles) {
-    ctx.rect(tile.x * cell + inset, tile.y * cell + inset, side, side);
-  }
-  ctx.stroke();
-  ctx.restore();
-
-  const edges = [
-    { dx: 0, dy: -1, x0: 0, y0: 0, x1: 1, y1: 0 },
-    { dx: 1, dy: 0, x0: 1, y0: 0, x1: 1, y1: 1 },
-    { dx: 0, dy: 1, x0: 0, y0: 1, x1: 1, y1: 1 },
-    { dx: -1, dy: 0, x0: 0, y0: 0, x1: 0, y1: 1 },
-  ];
-
-  ctx.save();
-  ctx.lineCap = "round";
-  // Two passes so the outer rim always draws over any band seam it touches.
-  for (const pass of ["band", "rim"] as const) {
-    ctx.strokeStyle = pass === "rim" ? PALETTE.MOVE_RANGE_EDGE : PALETTE.MOVE_RANGE_BAND_EDGE;
-    ctx.lineWidth = pass === "rim"
-      ? Math.max(1.2, cell * 0.055)
-      : Math.max(0.8, cell * 0.03);
+    const step = moveRangeStep((tile.apCost - cheapest) / span);
+    const radius = cell * step.radius;
+    const cx = tile.x * cell + cell / 2;
+    const cy = tile.y * cell + cell / 2;
     ctx.beginPath();
-    for (const tile of range.tiles) {
-      const cost = costs.get(`${tile.x},${tile.y}`)!;
-      for (const edge of edges) {
-        const nx = tile.x + edge.dx;
-        const ny = tile.y + edge.dy;
-        const neighbour = costs.get(`${nx},${ny}`);
-        const isRim = neighbour === undefined &&
-          !(nx === range.originX && ny === range.originY) &&
-          isPassable(map, nx, ny);
-        // Seams are drawn once, from the cheaper side of the pair.
-        const isSeam = neighbour !== undefined && neighbour > cost;
-        if (pass === "rim" ? !isRim : !isSeam) continue;
-        ctx.moveTo((tile.x + edge.x0) * cell, (tile.y + edge.y0) * cell);
-        ctx.lineTo((tile.x + edge.x1) * cell, (tile.y + edge.y1) * cell);
-      }
-    }
+    ctx.moveTo(cx, cy - radius);
+    ctx.lineTo(cx + radius, cy);
+    ctx.lineTo(cx, cy + radius);
+    ctx.lineTo(cx - radius, cy);
+    ctx.closePath();
+    ctx.globalAlpha = step.fill;
+    ctx.fill();
+    ctx.globalAlpha = step.edge;
     ctx.stroke();
   }
   ctx.restore();
