@@ -7,6 +7,7 @@ import {
   MAX_ACCENT_INTENSITY,
 } from "../src/renderLandmarks.ts";
 import { LANDMARK_KINDS, type MapEnvironment } from "../src/environment.ts";
+import { PALETTE } from "../src/renderPalette.ts";
 import { createEmptyMap, setTile, type GameMap } from "../src/map.ts";
 import { generateEncounter } from "../src/generation.ts";
 import { createRun } from "../src/run.ts";
@@ -245,6 +246,133 @@ describe("procedural environment art", () => {
     const { ctx, calls } = recordingContext();
     expect(() => drawLandmarkArt(ctx, legacy, 40, 0)).not.toThrow();
     expect(calls).toHaveLength(0);
+  });
+
+  it("draws the movement radius as shaded cells inside one bright rim", () => {
+    const map = createEmptyMap();
+    map.width = 5;
+    map.height = 5;
+    map.tiles = new Array(25).fill("floor");
+    const cell = 40;
+    const { ctx, calls } = recordingContext();
+    const canvas = {
+      style: { width: `${map.width * cell}px`, height: `${map.height * cell}px` },
+      width: map.width * cell,
+      height: map.height * cell,
+      getContext: () => ctx,
+    } as unknown as HTMLCanvasElement;
+    const tiles = [
+      { x: 2, y: 1, steps: 1, apCost: 1 },
+      { x: 1, y: 2, steps: 1, apCost: 1 },
+      { x: 3, y: 2, steps: 1, apCost: 1 },
+      { x: 2, y: 3, steps: 1, apCost: 1 },
+      { x: 2, y: 0, steps: 2, apCost: 1 },
+      { x: 0, y: 2, steps: 3, apCost: 2 },
+    ];
+    draw(canvas, {
+      map,
+      selected: null,
+      moveRange: { originX: 2, originY: 2, tiles },
+      highlights: [],
+      enemyPreviews: [],
+      floatingTexts: [],
+    }, 0);
+
+    // One shaded cell per walkable tile: the region is a grid the player can
+    // read tile by tile, not a single blurred blob.
+    const fills = calls.filter((call) => call.startsWith("fillRect(") && call.endsWith(",32.8,32.8)"));
+    expect(fills).toHaveLength(tiles.length);
+    // Cheaper tiles are painted more strongly than the ones deeper into the turn.
+    const alphas = calls.filter((call) => call.startsWith("globalAlpha="));
+    expect(alphas).toContain(`globalAlpha=${PALETTE.MOVE_RANGE_BAND_OPACITY[0]}`);
+    expect(alphas).toContain(`globalAlpha=${PALETTE.MOVE_RANGE_BAND_OPACITY[1]}`);
+    // The rim and the AP seam are separate strokes with separate weights.
+    expect(calls).toContain(`strokeStyle=${PALETTE.MOVE_RANGE_EDGE}`);
+    expect(calls).toContain(`strokeStyle=${PALETTE.MOVE_RANGE_BAND_EDGE}`);
+    const rimIndex = calls.indexOf(`strokeStyle=${PALETTE.MOVE_RANGE_EDGE}`);
+    const seamIndex = calls.indexOf(`strokeStyle=${PALETTE.MOVE_RANGE_BAND_EDGE}`);
+    expect(seamIndex).toBeLessThan(rimIndex);
+    // The unit's own tile is not part of the region, and its four shared edges
+    // with the region are therefore not drawn as rim.
+    expect(calls).not.toContain("moveTo(80,80)");
+  });
+
+  it("rims only the edge of the turn's reach, never units or cover inside it", () => {
+    const map = createEmptyMap();
+    map.width = 5;
+    map.height = 5;
+    map.tiles = new Array(25).fill("floor");
+    for (let i = 0; i < 5; i++) {
+      setTile(map, i, 0, "wall");
+      setTile(map, i, 4, "wall");
+      setTile(map, 0, i, "wall");
+      setTile(map, 4, i, "wall");
+    }
+    setTile(map, 2, 2, "half_cover");
+    map.units = [
+      { id: "mover", team: "player", x: 1, y: 1, hp: 5, maxHp: 5, ap: 4, maxAp: 4, overwatch: false, peekExposure: null },
+      { id: "foe", team: "enemy", x: 3, y: 3, hp: 5, maxHp: 5, ap: 4, maxAp: 4, overwatch: false, peekExposure: null },
+    ];
+    const { ctx, calls } = recordingContext();
+    const canvas = {
+      style: { width: "200px", height: "200px" },
+      width: 200,
+      height: 200,
+      getContext: () => ctx,
+    } as unknown as HTMLCanvasElement;
+    // Every tile the unit could stand on is inside the region, so the only
+    // things bordering it are walls, half cover, and the enemy.
+    draw(canvas, {
+      map,
+      selected: map.units[0],
+      moveRange: {
+        originX: 1,
+        originY: 1,
+        tiles: [
+          { x: 2, y: 1, steps: 1, apCost: 1 },
+          { x: 3, y: 1, steps: 2, apCost: 1 },
+          { x: 1, y: 2, steps: 1, apCost: 1 },
+          { x: 3, y: 2, steps: 2, apCost: 1 },
+          { x: 1, y: 3, steps: 2, apCost: 1 },
+          { x: 2, y: 3, steps: 3, apCost: 2 },
+        ],
+      },
+      highlights: [],
+      enemyPreviews: [],
+      floatingTexts: [],
+    }, 0);
+
+    const rimIndex = calls.indexOf(`strokeStyle=${PALETTE.MOVE_RANGE_EDGE}`);
+    expect(rimIndex).toBeGreaterThan(-1);
+    const rimPath = calls.slice(rimIndex, calls.indexOf("stroke()", rimIndex));
+    expect(rimPath.filter((call) => call.startsWith("moveTo("))).toEqual([]);
+    // The AP seam between the one- and two-point bands is still drawn.
+    const seamIndex = calls.indexOf(`strokeStyle=${PALETTE.MOVE_RANGE_BAND_EDGE}`);
+    const seamPath = calls.slice(seamIndex, calls.indexOf("stroke()", seamIndex));
+    expect(seamPath.filter((call) => call.startsWith("moveTo(")).length).toBeGreaterThan(0);
+  });
+
+  it("leaves the board untouched when there is no movement radius", () => {
+    const map = createEmptyMap();
+    map.width = 3;
+    map.height = 3;
+    map.tiles = new Array(9).fill("floor");
+    const { ctx, calls } = recordingContext();
+    const canvas = {
+      style: { width: "120px", height: "120px" },
+      width: 120,
+      height: 120,
+      getContext: () => ctx,
+    } as unknown as HTMLCanvasElement;
+    draw(canvas, {
+      map,
+      selected: null,
+      moveRange: { originX: 1, originY: 1, tiles: [] },
+      highlights: [],
+      enemyPreviews: [],
+      floatingTexts: [],
+    }, 0);
+    expect(calls).not.toContain(`strokeStyle=${PALETTE.MOVE_RANGE_EDGE}`);
   });
 
   it("keeps 24x24 encounters at the documented 28 px readable minimum", () => {

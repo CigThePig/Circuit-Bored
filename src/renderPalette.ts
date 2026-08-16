@@ -70,6 +70,15 @@ export const PALETTE = {
   HL_FILL_OPACITY: 0.22,
   HL_BRACKET_LEN: 0.22,
 
+  // Movement radius. One green mass reads as "you may walk here"; the band
+  // opacity carries how much AP the walk costs and the bright rim carries how
+  // far the turn reaches.
+  MOVE_RANGE: "#50c878",
+  MOVE_RANGE_BAND_OPACITY: [0.2, 0.15, 0.11, 0.08],
+  MOVE_RANGE_CELL_EDGE: "rgba(126, 236, 168, 0.2)",
+  MOVE_RANGE_BAND_EDGE: "rgba(126, 236, 168, 0.45)",
+  MOVE_RANGE_EDGE: "rgba(126, 236, 168, 0.85)",
+
   SIGHT_CLEAR_OUTER: "rgba(90, 214, 255, 0.14)",
   SIGHT_CLEAR_INNER: "rgba(128, 229, 255, 0.72)",
   SIGHT_COVER_OUTER: "rgba(255, 177, 71, 0.12)",

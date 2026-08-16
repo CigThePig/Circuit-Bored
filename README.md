@@ -3,6 +3,16 @@
 A fast, browser-based tactical roguelike built around action points, cover,
 line of sight, corner peeking, committed exposure, and overwatch.
 
+## Movement
+
+Units walk in eight directions. Selecting a unit shows every tile it can reach
+this turn, shaded by the action points the walk would spend; tapping any tile
+in that region walks the whole route, one tile at a time, with overwatch
+resolved at each tile. One action point buys `TILES_PER_MOVE_AP` tiles of
+travel (`src/rules.ts`), so a turn covers twice the ground of a turn where
+every tile cost a full point while the number of shots it can contain is
+unchanged.
+
 ## Run loop
 
 A run is a deterministic seven-node route. Players choose between standard and
@@ -17,6 +27,8 @@ continue to use their separate `circuit-bored.map.v1` format.
 ## Architecture
 
 - `src/combat.ts`, `src/ai.ts`, and `src/runtime.ts` contain the tactical match.
+- `src/rules.ts` owns the action-point economy; `src/movement.ts` owns walking
+  geometry and the reachable region both the player and the AI plan against.
 - `src/rng.ts` owns serializable seeded randomness.
 - `src/content.ts` is the registry for unit archetypes and upgrades.
 - `src/generation.ts` builds validated, connected tactical encounters.

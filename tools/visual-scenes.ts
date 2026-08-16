@@ -27,6 +27,7 @@ import {
 import { paintBoundary } from "../src/generationMotifs.ts";
 import { dominantLandmark, environmentProfile, type MapRect } from "../src/environment.ts";
 import { setTile, type GameMap } from "../src/map.ts";
+import { computeMovementField, movementDestinations } from "../src/movement.ts";
 import { previewShot } from "../src/combat.ts";
 import {
   projectileKindForUnit,
@@ -240,17 +241,22 @@ function overlayScene(): VisualScene {
   return {
     id: "overlays",
     title: "Combat-overlay matrix",
-    description: "Canonical move, target, cover, threat, firing-line, HP, AP, selection, and overwatch cues.",
-    review: "No marker should cover a face or weapon; every cue should retain exactly one meaning.",
+    description: "Canonical movement radius, target, cover, threat, firing-line, HP, AP, selection, and overwatch cues.",
+    review: "The movement radius should read as walkable ground with a legible outer edge and AP bands, without burying units, cover, or targets; no marker should cover a face or weapon, and every cue should retain exactly one meaning.",
     state: {
       map,
       selected: rook,
+      moveRange: {
+        originX: rook.x,
+        originY: rook.y,
+        // Built from the production movement rules so the review looks at the
+        // radius the game actually offers, not a hand-drawn approximation.
+        tiles: movementDestinations(rook, computeMovementField(map, rook)),
+      },
       highlights: [
-        { x: 1, y: 4, fill: "rgba(80, 200, 120, 0.55)", border: "rgba(80, 200, 120, 1)", kind: "move" },
-        { x: 2, y: 3, fill: "rgba(80, 200, 120, 0.55)", border: "rgba(80, 200, 120, 1)", kind: "move" },
-        { x: clear.x, y: clear.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)", kind: "target" },
-        { x: covered.x, y: covered.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)", kind: "target" },
-        { x: difficult.x, y: difficult.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)", kind: "target" },
+        { x: clear.x, y: clear.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)" },
+        { x: covered.x, y: covered.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)" },
+        { x: difficult.x, y: difficult.y, fill: "rgba(255, 80, 80, 0.55)", border: "rgba(255, 80, 80, 1)" },
       ],
       enemyPreviews: [
         { x: clear.x, y: clear.y, hitPct: 82, hasCover: false },

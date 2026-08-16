@@ -80,6 +80,20 @@ describe("visual laboratory", () => {
     expect(overlays.sightLines).toHaveLength(3);
     expect(overlays.threatMarkers).toHaveLength(2);
     expect(overlays.coverIndicators).toHaveLength(2);
+
+    // The movement radius is the review surface for a whole turn of travel, so
+    // it has to be the real reachable set for the selected unit - several
+    // action points deep, and never overlapping a unit or blocked terrain.
+    const selected = overlays.selected!;
+    const range = overlays.moveRange!;
+    expect(range).toMatchObject({ originX: selected.x, originY: selected.y });
+    expect(range.tiles.length).toBeGreaterThan(20);
+    expect(Math.max(...range.tiles.map((tile) => tile.apCost))).toBeGreaterThanOrEqual(3);
+    expect(range.tiles.some((tile) => tile.x !== selected.x && tile.y !== selected.y)).toBe(true);
+    for (const tile of range.tiles) {
+      expect(getTile(overlays.map, tile.x, tile.y)).toBe("floor");
+      expect(overlays.map.units.some((unit) => unit.x === tile.x && unit.y === tile.y)).toBe(false);
+    }
   });
 
   it("uses deterministic valid generator output for every theme", () => {

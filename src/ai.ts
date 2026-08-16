@@ -1,5 +1,14 @@
 import type { GameMap, Unit } from "./map.ts";
-import { getTile, inBounds, isPassable, unitAt } from "./map.ts";
+import { isPassable, unitAt } from "./map.ts";
+import {
+  canStep,
+  computeMovementField,
+  diagonalIsClear,
+  isOpenTerrain,
+  MOVE_DIRECTIONS,
+  ORTHOGONAL_DIRECTIONS,
+} from "./movement.ts";
+import { movementApCost, movementApCostForTiles, movementRange } from "./rules.ts";
 import {
   BASE_HIT,
   canShootTarget,
@@ -17,13 +26,6 @@ export type AiAction =
   | { kind: "overwatch" }
   | { kind: "wait" };
 
-const DIRS = [
-  { dx: 0, dy: -1 },
-  { dx: 1, dy: 0 },
-  { dx: 0, dy: 1 },
-  { dx: -1, dy: 0 },
-];
-
 const SHOOT_AP_COST = 2;
 
 export const AI_SCORE_HAS_SHOT = 200;
@@ -36,6 +38,11 @@ export const AI_SCORE_PEEK_EXPOSURE_RISK = -70;
 
 function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
+}
+
+/** Steps of eight-way movement between two tiles on open ground. */
+function chebyshev(ax: number, ay: number, bx: number, by: number): number {
+  return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
 
 function livingPlayers(map: GameMap): Unit[] {
@@ -94,9 +101,9 @@ function aStarRoute(
   if (sx === tx && sy === ty) return null;
 
   const passable = (x: number, y: number): boolean => {
-    if (!inBounds(map, x, y)) return false;
-    const t = getTile(map, x, y);
-    if (t === "wall" || t === "half_cover") return false;
+    if (!isOpenTerrain(map, x, y)) return false;
+    // The destination may hold the unit being routed toward; the route ends
+    // beside it, never on it, but it still has to be expandable as a goal.
     if (x === tx && y === ty) return true;
     if (unitAt(map, x, y)) return false;
     return true;
@@ -107,7 +114,7 @@ function aStarRoute(
     x: sx,
     y: sy,
     g: 0,
-    f: manhattan(sx, sy, tx, ty),
+    f: chebyshev(sx, sy, tx, ty),
     parent: null,
   };
   const open: AStarNode[] = [start];
@@ -131,12 +138,13 @@ function aStarRoute(
       return { next: { x: n.x, y: n.y }, distance: cur.g };
     }
 
-    for (const d of DIRS) {
-      const nx = cur.x + d.dx;
-      const ny = cur.y + d.dy;
+    for (const d of MOVE_DIRECTIONS) {
+      const nx = cur.x + d.x;
+      const ny = cur.y + d.y;
       const k = key(nx, ny);
       if (closed.has(k)) continue;
       if (!passable(nx, ny)) continue;
+      if (!diagonalIsClear(map, cur.x, cur.y, nx, ny)) continue;
       const g = cur.g + 1;
       const existing = openMap.get(k);
       if (existing && existing.g <= g) continue;
@@ -144,7 +152,7 @@ function aStarRoute(
         x: nx,
         y: ny,
         g,
-        f: g + manhattan(nx, ny, tx, ty),
+        f: g + chebyshev(nx, ny, tx, ty),
         parent: cur,
       };
       if (existing) {
@@ -160,47 +168,23 @@ function aStarRoute(
 }
 
 /**
- * BFS over passable tiles within `maxSteps` Manhattan steps from (sx,sy).
- * Returns each reachable tile and the number of steps to reach it. The
- * starting tile is included with steps=0. Other living units block.
+ * Every tile the enemy can walk to this turn, including its current tile at
+ * steps=0. Uses the same eight-way field the player's movement radius is drawn
+ * from, so both sides plan against identical geometry.
  */
 function reachableTiles(
   map: GameMap,
   enemy: Unit,
-  maxSteps: number,
 ): Array<{ x: number; y: number; steps: number }> {
-  const out: Array<{ x: number; y: number; steps: number }> = [];
-  const visited = new Set<string>();
-  const queue: Array<{ x: number; y: number; steps: number }> = [
-    { x: enemy.x, y: enemy.y, steps: 0 },
-  ];
-  visited.add(`${enemy.x},${enemy.y}`);
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
-    out.push(cur);
-    if (cur.steps >= maxSteps) continue;
-    for (const d of DIRS) {
-      const nx = cur.x + d.dx;
-      const ny = cur.y + d.dy;
-      const k = `${nx},${ny}`;
-      if (visited.has(k)) continue;
-      if (!inBounds(map, nx, ny)) continue;
-      const t = getTile(map, nx, ny);
-      if (t === "wall" || t === "half_cover") continue;
-      const occupant = unitAt(map, nx, ny);
-      if (occupant && occupant.id !== enemy.id) continue;
-      visited.add(k);
-      queue.push({ x: nx, y: ny, steps: cur.steps + 1 });
-    }
-  }
-  return out;
+  const field = computeMovementField(map, enemy, movementRange(enemy));
+  return [...field.nodes.values()].map(({ x, y, steps }) => ({ x, y, steps }));
 }
 
 function adjacentAllyCount(map: GameMap, enemy: Unit, cx: number, cy: number): number {
   let count = 0;
-  for (const d of DIRS) {
-    const nx = cx + d.dx;
-    const ny = cy + d.dy;
+  for (const d of ORTHOGONAL_DIRECTIONS) {
+    const nx = cx + d.x;
+    const ny = cy + d.y;
     const u = unitAt(map, nx, ny);
     if (u && u.team === enemy.team && u.id !== enemy.id) count += 1;
   }
@@ -224,7 +208,7 @@ function scoreCandidate(
   enemy.y = candidate.y;
   try {
     let score = 0;
-    const remainingAp = enemy.ap - candidate.steps;
+    const remainingAp = enemy.ap - movementApCostForTiles(enemy, candidate.steps);
     const shot = canShootTarget(map, enemy, target);
     const canFire = shot.canShoot && remainingAp >= SHOOT_AP_COST;
     if (canFire) {
@@ -285,7 +269,8 @@ export function takeEnemyAction(
   session: AiSession,
   rng: () => number = Math.random,
 ): AiAction {
-  if (enemy.hp <= 0 || enemy.ap <= 0) return { kind: "wait" };
+  if (enemy.hp <= 0) return { kind: "wait" };
+  if (enemy.ap <= 0 && movementRange(enemy) <= 0) return { kind: "wait" };
 
   const targetId = session.turnTargets.get(enemy.id);
   let target: Unit | null = null;
@@ -327,7 +312,7 @@ export function takeEnemyAction(
   }
 
   // No shot now: pick the best reachable tile, then take one step toward it.
-  const reachable = reachableTiles(map, enemy, enemy.ap);
+  const reachable = reachableTiles(map, enemy);
   let bestCandidate: { x: number; y: number; steps: number } | null = null;
   let bestScore = -Infinity;
   for (const c of reachable) {
@@ -355,8 +340,8 @@ export function takeEnemyAction(
   let stepTarget = bestCandidate;
   let plannedStep: { x: number; y: number } | null = null;
   if (!stepTarget || (stepTarget.x === enemy.x && stepTarget.y === enemy.y)) {
-    const adjacents = DIRS
-      .map((d) => ({ x: target.x + d.dx, y: target.y + d.dy }))
+    const adjacents = MOVE_DIRECTIONS
+      .map((d) => ({ x: target.x + d.x, y: target.y + d.y }))
       .filter((p) => isPassable(map, p.x, p.y));
     let bestRoute: AStarRoute | null = null;
     for (const a of adjacents) {
@@ -382,12 +367,17 @@ export function takeEnemyAction(
     stepTarget.y,
   )?.next;
   if (!step) return { kind: "wait" };
-  if (!isPassable(map, step.x, step.y)) return { kind: "wait" };
+  if (!canStep(map, enemy, enemy.x, enemy.y, step.x, step.y)) return { kind: "wait" };
+  // A tile of travel only bills an action point every other step, so an enemy
+  // covers the same doubled distance a player does.
+  const stepCost = movementApCost(enemy);
+  if (enemy.ap < stepCost) return { kind: "wait" };
 
   const from = { x: enemy.x, y: enemy.y };
   enemy.x = step.x;
   enemy.y = step.y;
-  enemy.ap -= 1;
+  enemy.ap -= stepCost;
+  enemy.movesThisTurn = (enemy.movesThisTurn ?? 0) + 1;
   enemy.peekExposure = null;
   return { kind: "move", from, to: { x: enemy.x, y: enemy.y } };
 }

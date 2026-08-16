@@ -30,6 +30,11 @@ Lower levels must never obscure higher levels.
 ## Combat-overlay rules
 
 - One cue, one meaning. Target brackets mean the selected unit can shoot.
+- The movement radius is one shaded region of walkable cells, not a ring of
+  per-step markers: a bright rim states how far the turn reaches, fainter seams
+  divide the action points the walk spends, and closer bands read stronger than
+  distant ones. It covers a large share of the board, so it must stay quieter
+  than units, cover, threat, and target cues at every cell size.
 - Warning chevrons mean an enemy currently threatens a living player.
 - Clear-shot and covered-shot lines are thin, secondary guides.
 - Overlay graphics must not cover faces, HP, or the weapon silhouette.

@@ -1,4 +1,4 @@
-import { getTile, type GameMap, type Unit } from "./map.ts";
+import { getTile, isPassable, type GameMap, type Unit } from "./map.ts";
 import { floorTreatmentAt, type FloorTreatmentZone } from "./environment.ts";
 import { drawLandmarkArt } from "./renderLandmarks.ts";
 import {
@@ -157,17 +157,37 @@ export type MovementEffect = {
   loop?: boolean;
 };
 
+export type MoveRangeTile = {
+  x: number;
+  y: number;
+  /** Tiles walked from the selected unit. */
+  steps: number;
+  /** AP charged for stopping here. Drives the band shading. */
+  apCost: number;
+};
+
+/**
+ * Every tile the selected unit can walk to this turn, drawn as one shaded
+ * region with a bright outer rim instead of a ring of per-step markers.
+ */
+export type MoveRange = {
+  originX: number;
+  originY: number;
+  tiles: MoveRangeTile[];
+};
+
 export type RenderState = {
   map: GameMap;
   selected: Unit | null;
   /** Hide gameplay UI while keeping the board and unit artwork visible. */
   showUnitUi?: boolean;
+  moveRange?: MoveRange | null;
+  /** Shootable enemies. Walkable tiles belong to `moveRange`, not here. */
   highlights: {
     x: number;
     y: number;
     fill: string;
     border: string;
-    kind?: "move" | "target";
   }[];
   enemyPreviews: EnemyPreview[];
   floatingTexts: FloatingText[];
@@ -276,8 +296,12 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
     drawLandmarkArt(ctx, map, cell, now, { animate: state.ambientAnimation !== false });
   }
 
+  if (state.moveRange && state.moveRange.tiles.length > 0) {
+    drawMoveRange(ctx, map, cell, state.moveRange);
+  }
+
   for (const h of state.highlights) {
-    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill, h.border, h.kind ?? "move");
+    drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill);
   }
 
   if (state.sightLines && state.sightLines.length > 0) {
@@ -1254,47 +1278,101 @@ function drawCornerBrackets(
   ctx.stroke();
 }
 
+/**
+ * Paints the reachable region as a shaded grid: one cell per walkable tile,
+ * shaded by the AP the walk costs, with a bright rim where the turn's travel
+ * runs out and a faint seam where the next action point starts. The rim is
+ * only drawn against ground the unit could otherwise have stood on: walls,
+ * cover, and occupied tiles already draw their own edges, and outlining them
+ * again would ring every enemy inside the region in movement green.
+ */
+function drawMoveRange(
+  ctx: CanvasRenderingContext2D,
+  map: GameMap,
+  cell: number,
+  range: MoveRange,
+): void {
+  const bands = PALETTE.MOVE_RANGE_BAND_OPACITY;
+  const costs = new Map<string, number>();
+  for (const tile of range.tiles) {
+    costs.set(`${tile.x},${tile.y}`, Math.max(1, tile.apCost));
+  }
+
+  ctx.save();
+  const inset = Math.max(0.5, cell * 0.09);
+  const side = cell - inset * 2;
+  ctx.fillStyle = PALETTE.MOVE_RANGE;
+  for (const tile of range.tiles) {
+    const band = Math.min(bands.length, Math.max(1, tile.apCost)) - 1;
+    ctx.globalAlpha = bands[band];
+    ctx.fillRect(tile.x * cell + inset, tile.y * cell + inset, side, side);
+  }
+  ctx.restore();
+
+  // One outline per cell keeps the region legible as a grid of steppable
+  // tiles: the player is choosing a tile, not painting an area.
+  ctx.save();
+  ctx.strokeStyle = PALETTE.MOVE_RANGE_CELL_EDGE;
+  ctx.lineWidth = Math.max(0.5, cell * 0.02);
+  ctx.beginPath();
+  for (const tile of range.tiles) {
+    ctx.rect(tile.x * cell + inset, tile.y * cell + inset, side, side);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  const edges = [
+    { dx: 0, dy: -1, x0: 0, y0: 0, x1: 1, y1: 0 },
+    { dx: 1, dy: 0, x0: 1, y0: 0, x1: 1, y1: 1 },
+    { dx: 0, dy: 1, x0: 0, y0: 1, x1: 1, y1: 1 },
+    { dx: -1, dy: 0, x0: 0, y0: 0, x1: 0, y1: 1 },
+  ];
+
+  ctx.save();
+  ctx.lineCap = "round";
+  // Two passes so the outer rim always draws over any band seam it touches.
+  for (const pass of ["band", "rim"] as const) {
+    ctx.strokeStyle = pass === "rim" ? PALETTE.MOVE_RANGE_EDGE : PALETTE.MOVE_RANGE_BAND_EDGE;
+    ctx.lineWidth = pass === "rim"
+      ? Math.max(1.2, cell * 0.055)
+      : Math.max(0.8, cell * 0.03);
+    ctx.beginPath();
+    for (const tile of range.tiles) {
+      const cost = costs.get(`${tile.x},${tile.y}`)!;
+      for (const edge of edges) {
+        const nx = tile.x + edge.dx;
+        const ny = tile.y + edge.dy;
+        const neighbour = costs.get(`${nx},${ny}`);
+        const isRim = neighbour === undefined &&
+          !(nx === range.originX && ny === range.originY) &&
+          isPassable(map, nx, ny);
+        // Seams are drawn once, from the cheaper side of the pair.
+        const isSeam = neighbour !== undefined && neighbour > cost;
+        if (pass === "rim" ? !isRim : !isSeam) continue;
+        ctx.moveTo((tile.x + edge.x0) * cell, (tile.y + edge.y0) * cell);
+        ctx.lineTo((tile.x + edge.x1) * cell, (tile.y + edge.y1) * cell);
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Ground shadow marking a unit the selected shooter can hit. */
 function drawHighlight(
   ctx: CanvasRenderingContext2D,
   px: number,
   py: number,
   cell: number,
   fill: string,
-  border: string,
-  kind: "move" | "target",
 ): void {
   ctx.save();
-  ctx.globalAlpha = kind === "target" ? 0.08 : PALETTE.HL_FILL_OPACITY;
+  ctx.globalAlpha = 0.08;
   ctx.fillStyle = fill;
-  const inset = kind === "target" ? cell * 0.14 : cell * 0.20;
-  if (kind === "target") {
-    ctx.beginPath();
-    ctx.ellipse(px + cell / 2, py + cell * 0.66, cell * 0.34, cell * 0.17, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(px + cell / 2, py + inset);
-    ctx.lineTo(px + cell - inset, py + cell / 2);
-    ctx.lineTo(px + cell / 2, py + cell - inset);
-    ctx.lineTo(px + inset, py + cell / 2);
-    ctx.closePath();
-    ctx.fill();
-  }
+  ctx.beginPath();
+  ctx.ellipse(px + cell / 2, py + cell * 0.66, cell * 0.34, cell * 0.17, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
-
-  if (kind === "move") {
-    ctx.strokeStyle = border;
-    ctx.globalAlpha = 0.72;
-    ctx.lineWidth = Math.max(1, cell * 0.035);
-    ctx.beginPath();
-    ctx.moveTo(px + cell / 2, py + inset);
-    ctx.lineTo(px + cell - inset, py + cell / 2);
-    ctx.lineTo(px + cell / 2, py + cell - inset);
-    ctx.lineTo(px + inset, py + cell / 2);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
 }
 
 function drawSightLine(

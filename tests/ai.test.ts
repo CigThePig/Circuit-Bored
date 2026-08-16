@@ -259,6 +259,61 @@ describe("AI movement", () => {
     }
   });
 
+  it("bills one action point for every two tiles it walks", () => {
+    const map = buildMap([
+      "p...........",
+      "....#.......",
+      "............",
+    ], [
+      { team: "player", x: 0, y: 0 },
+      { team: "enemy", x: 11, y: 2 },
+    ]);
+    const session = createAiSession();
+    const enemy = map.units[1];
+    beginEnemyTurn(map, enemy, session);
+    const spentAfter: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const action = takeEnemyAction(map, enemy, session);
+      if (action.kind !== "move") break;
+      spentAfter.push(enemy.maxAp - enemy.ap);
+    }
+    // Four tiles of travel cost two action points, not four.
+    expect(spentAfter).toEqual([1, 1, 2, 2]);
+    expect(enemy.movesThisTurn).toBe(4);
+  });
+
+  it("covers eight tiles of ground in a turn without gaining a third shot", () => {
+    const map = buildMap([
+      "p.....e",
+    ], [
+      { team: "player", x: 0, y: 0 },
+      { team: "enemy", x: 6, y: 0 },
+    ]);
+    const log = runEnemyTurn(map, 1);
+    // Four action points still buy exactly two shots.
+    expect(log.filter((a) => a.kind === "shoot")).toHaveLength(2);
+  });
+
+  it("uses diagonal steps to close on a target off both axes", () => {
+    const map = buildMap([
+      "e.........",
+      "..........",
+      "....##....",
+      "....##....",
+      "..........",
+      ".........p",
+    ], [
+      { team: "enemy", x: 0, y: 0 },
+      { team: "player", x: 9, y: 5 },
+    ]);
+    const log = runEnemyTurn(map, 0);
+    const moves = log.filter((a) => a.kind === "move");
+    expect(moves.length).toBeGreaterThan(0);
+    expect(
+      moves.some((a) => a.kind === "move" && a.from.x !== a.to.x && a.from.y !== a.to.y),
+    ).toBe(true);
+  });
+
   it("lets a boxed sentinel establish overwatch instead of wasting its turn", () => {
     const map = buildMap([
       "#####",
