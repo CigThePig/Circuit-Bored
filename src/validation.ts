@@ -1,6 +1,7 @@
 import type { GameMap, TileType, Unit } from "./map.ts";
 import { UNIT_AP, UNIT_HP, generateUnitId } from "./map.ts";
 import { DEFAULT_LEVEL_THEME_ID, isLevelThemeId } from "./themes.ts";
+import { isValidStatuses, sanitizeStatuses } from "./status.ts";
 import {
   isEnvironmentProfile,
   isFloorTreatmentId,
@@ -295,6 +296,14 @@ export function validateMap(map: GameMap): ValidationReport {
         { unitId: u.id },
       );
     }
+    if (!isValidStatuses(u.statuses)) {
+      pushError(
+        issues,
+        "INVALID_UNIT_STATUSES",
+        `Unit '${u.id}' has malformed tactical statuses.`,
+        { unitId: u.id },
+      );
+    }
   }
 
   // Stacked living units on the same tile.
@@ -564,6 +573,9 @@ export function sanitizeLoadedMap(raw: unknown): {
     if (ap > maxAp) ap = maxAp;
 
     const overwatch = typeof u.overwatch === "boolean" ? u.overwatch : false;
+    // Absent or malformed statuses degrade to "nothing active" rather than
+    // failing the load, so a save written before statuses existed still opens.
+    const statuses = sanitizeStatuses(u.statuses);
 
     cleanedUnits.push({
       id,
@@ -576,6 +588,7 @@ export function sanitizeLoadedMap(raw: unknown): {
       maxAp,
       overwatch,
       peekExposure: null,
+      ...(statuses ? { statuses } : {}),
     });
   }
 

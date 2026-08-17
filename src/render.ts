@@ -92,6 +92,20 @@ export type EnemyPreview = {
   y: number;
   hitPct: number;
   hasCover: boolean;
+  /** The target is Exposed to the selected unit: flank, crossfire, or lean. */
+  exposed?: boolean;
+  /** Damage this shot deals on a hit, shown when it is not the base value. */
+  damage?: number;
+};
+
+/**
+ * A tile inside the selected unit's movement radius that a hostile on
+ * overwatch already covers. Drawn as a hazard tick over the radius so the cost
+ * of crossing a controlled lane is visible before the walk starts.
+ */
+export type WatchedTile = {
+  x: number;
+  y: number;
 };
 
 export type CoverIndicator = {
@@ -193,6 +207,8 @@ export type RenderState = {
   floatingTexts: FloatingText[];
   coverIndicators?: CoverIndicator[];
   threatMarkers?: ThreatMarker[];
+  /** Enemy-overwatched tiles inside the selected unit's movement radius. */
+  watchedTiles?: WatchedTile[];
   sightLines?: SightLine[];
   shotEffects?: ShotEffect[];
   movementEffects?: MovementEffect[];
@@ -298,6 +314,14 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
 
   if (state.moveRange && state.moveRange.tiles.length > 0) {
     drawMoveRange(ctx, cell, state.moveRange);
+  }
+
+  // Above the radius it qualifies, below units and targets: a watched lane is
+  // information about ground, not about a unit.
+  if (state.watchedTiles && state.watchedTiles.length > 0) {
+    for (const tile of state.watchedTiles) {
+      drawWatchedTile(ctx, cell, tile);
+    }
   }
 
   for (const h of state.highlights) {
@@ -1897,14 +1921,10 @@ function drawUnit(
     ctx.arc(cx, cy, ringR, Math.PI * 0.14, Math.PI * 1.86);
     ctx.stroke();
     ctx.setLineDash([]);
-    const badgeSize = Math.max(7, Math.floor(cell * 0.18));
-    ctx.font = `900 ${badgeSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = PALETTE.OVERWATCH;
-    ctx.fillText("OW", px + cell * 0.20, py + cell * 0.78);
     ctx.restore();
   }
+
+  if (showUnitUi && u.hp > 0) drawStatusChips(ctx, px, py, cell, u);
 
   if (showUnitUi && isSelected) {
     ctx.save();
@@ -1924,6 +1944,125 @@ function drawUnit(
     drawHpChip(ctx, px, py, cell, u);
     drawApPips(ctx, px, py, cell, u, mapHeightPx);
   }
+}
+
+type StatusChip = { letter: string; color: string };
+
+/**
+ * The tactical statuses active on a unit, most urgent first.
+ *
+ * Capped at two. The bottom-left of a cell is roughly half its width before
+ * the target percentage pill begins, and at the 28 px minimum that is two
+ * legible glyphs - a third would shrink all of them into a smudge. Suppressed
+ * leads because it is what changes the unit's next turn; Overwatch is second
+ * and also carries its own ring. The HUD status line always spells out the
+ * complete set for the selected unit.
+ */
+function statusChipsFor(u: Unit): StatusChip[] {
+  const chips: StatusChip[] = [];
+  const statuses = u.statuses;
+  if (statuses && statuses.suppressed > 0) {
+    chips.push({ letter: "S", color: PALETTE.SUPPRESSED });
+  }
+  if (u.overwatch) chips.push({ letter: "W", color: PALETTE.OVERWATCH });
+  if (statuses?.aimed) chips.push({ letter: "A", color: PALETTE.AIM });
+  if (statuses?.hunkered) chips.push({ letter: "H", color: PALETTE.HUNKER });
+  return chips.slice(0, 2);
+}
+
+/**
+ * One compact plate at the bottom-left of the unit's cell carrying the active
+ * status letters side by side.
+ *
+ * A single wide plate rather than one plate per status: at 28 px a square
+ * per-status chip is about six pixels across, which turns its glyph into
+ * mush and reduces the whole strip to indistinguishable dark blobs in
+ * grayscale. Sharing one plate lets each letter be drawn at the same size as
+ * the archetype badge the board already relies on, and letters mean the board
+ * never depends on colour alone.
+ */
+function drawStatusChips(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+  u: Unit,
+): void {
+  const chips = statusChipsFor(u);
+  if (chips.length === 0) return;
+  const fontSize = Math.max(7, Math.floor(cell * 0.19));
+  const glyphW = fontSize * 0.72;
+  const padX = Math.max(1.5, cell * 0.035);
+  const plateW = glyphW * chips.length + padX * 2;
+  const plateH = fontSize + Math.max(2, cell * 0.06);
+  const x = px + Math.max(1, cell * 0.045);
+  const y = py + cell - plateH - Math.max(1, cell * 0.04);
+
+  ctx.save();
+  roundRect(ctx, x, y, plateW, plateH, Math.max(1, plateH * 0.22));
+  ctx.fillStyle = PALETTE.STATUS_PLATE;
+  ctx.fill();
+  ctx.strokeStyle = chips[0].color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = `900 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  chips.forEach((chip, index) => {
+    ctx.fillStyle = chip.color;
+    ctx.fillText(
+      chip.letter,
+      x + padX + glyphW * (index + 0.5),
+      y + plateH / 2 + 0.5,
+    );
+  });
+  ctx.restore();
+}
+
+/**
+ * A hazard mark on ground a hostile watcher already covers.
+ *
+ * Deliberately quiet: a thin inset outline for the extent of the controlled
+ * ground plus a short double hatch in the middle. An earlier version filled
+ * most of the tile, which at 56 px read as a second movement radius fighting
+ * the first, and at 28 px disappeared into floor decoration entirely. Hatch
+ * strokes are a different shape from the radius diamonds and from the target
+ * brackets, so the tile keeps one meaning per mark.
+ */
+function drawWatchedTile(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  tile: WatchedTile,
+): void {
+  const px = tile.x * cell;
+  const py = tile.y * cell;
+  const inset = cell * 0.14;
+  const cx = px + cell / 2;
+  const cy = py + cell / 2;
+  const reach = cell * 0.17;
+  const spread = cell * 0.13;
+
+  ctx.save();
+  ctx.strokeStyle = PALETTE.WATCHED_LANE_SOFT;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + inset, py + inset, cell - inset * 2, cell - inset * 2);
+
+  // A dark backing stroke keeps the hatch readable over bright floor plates
+  // and over the movement radius it sits on top of.
+  for (const pass of [0, 1]) {
+    ctx.strokeStyle = pass === 0 ? "rgba(4, 7, 11, 0.8)" : PALETTE.WATCHED_LANE;
+    ctx.lineWidth = pass === 0
+      ? Math.max(2.5, cell * 0.085)
+      : Math.max(1, cell * 0.045);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    for (const offset of [-spread, spread]) {
+      ctx.moveTo(cx + offset - reach * 0.5, cy + reach * 0.5);
+      ctx.lineTo(cx + offset + reach * 0.5, cy - reach * 0.5);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawArchetypeBadge(
@@ -2237,15 +2376,53 @@ function drawEnemyPreview(
   ctx.fillText(text, pillX + pillW / 2, pillY + pillH / 2 + 0.5);
 
   if (p.hasCover) {
+    // Top-right: the bottom-left of the cell belongs to the status chip strip,
+    // and a cover shield sitting on top of a suppression chip made both
+    // unreadable at 28 px.
     const shieldH = Math.max(7, Math.floor(cell * 0.22));
     drawShieldIcon(
       ctx,
-      px + cell * 0.07,
-      py + cell - shieldH - cell * 0.07,
+      px + cell - shieldH * 0.78 - cell * 0.07,
+      py + cell * 0.07,
       shieldH,
       PALETTE.PREVIEW_SHIELD,
       PALETTE.PREVIEW_SHIELD_OUTLINE,
     );
+  }
+  if (p.exposed) drawExposedMarker(ctx, px, py, cell);
+  ctx.restore();
+}
+
+/**
+ * Exposed target cue: two opposed arrows converging on the target, drawn on
+ * the cell's free left and right margins. It reads as "caught between angles"
+ * rather than as another badge, and it is a shape rather than a tint so it
+ * survives grayscale.
+ */
+function drawExposedMarker(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  cell: number,
+): void {
+  const cy = py + cell * 0.5;
+  const len = cell * 0.16;
+  const inset = cell * 0.03;
+  ctx.save();
+  ctx.strokeStyle = PALETTE.EXPOSED;
+  ctx.lineWidth = Math.max(1.5, cell * 0.05);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+  ctx.shadowBlur = Math.max(1, cell * 0.05);
+  for (const dir of [1, -1]) {
+    const tipX = px + (dir === 1 ? inset + len : cell - inset - len);
+    const backX = tipX - dir * len;
+    ctx.beginPath();
+    ctx.moveTo(backX, cy - len * 0.72);
+    ctx.lineTo(tipX, cy);
+    ctx.lineTo(backX, cy + len * 0.72);
+    ctx.stroke();
   }
   ctx.restore();
 }

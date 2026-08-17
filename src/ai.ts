@@ -12,21 +12,33 @@ import { movementApCost, movementApCostForTiles, movementRange } from "./rules.t
 import {
   BASE_HIT,
   canShootTarget,
+  exposedAgainst,
+  hasAdjacentCover,
   hasStrictLineOfSight,
+  previewShot,
   resolveShot,
   shotHitPenalty,
   targetCoverPenalty,
   type ShotResult,
 } from "./combat.ts";
+import {
+  HUNKER_AP_COST,
+  OVERWATCH_AP_COST,
+  performAction,
+  SHOOT_AP_COST,
+} from "./actions.ts";
+import { isHunkered, isSuppressed } from "./status.ts";
+import { onUnitMoved } from "./rules.ts";
 import type { AiSession } from "./aiSession.ts";
 
 export type AiAction =
   | { kind: "shoot"; target: Unit; result: ShotResult }
   | { kind: "move"; from: { x: number; y: number }; to: { x: number; y: number } }
   | { kind: "overwatch" }
+  | { kind: "hunker" }
   | { kind: "wait" };
 
-const SHOOT_AP_COST = 2;
+export { SHOOT_AP_COST };
 
 export const AI_SCORE_HAS_SHOT = 200;
 export const AI_SCORE_HIT_CHANCE = 100;
@@ -35,6 +47,15 @@ export const AI_SCORE_ADJACENT_ALLY = -5;
 export const AI_SCORE_DISTANCE = -1;
 export const AI_SCORE_EXPOSED = -20;
 export const AI_SCORE_PEEK_EXPOSURE_RISK = -70;
+/**
+ * Standing where a player on overwatch can shoot is worth about as much as
+ * losing the shot the move was made for. It is a weight rather than a ban so
+ * an enemy still walks a watched lane when the position on the far side is
+ * clearly worth the reaction shot.
+ */
+export const AI_SCORE_OVERWATCH_LANE = -110;
+/** Bonus for a destination that turns the target's own cover against it. */
+export const AI_SCORE_EXPOSES_TARGET = 45;
 
 function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
@@ -192,6 +213,34 @@ function adjacentAllyCount(map: GameMap, enemy: Unit, cx: number, cy: number): n
 }
 
 /**
+ * True when some living player is holding overwatch that could take a reaction
+ * shot at `enemy` where it currently stands. Callers relocate the enemy first,
+ * so this reads the same geometry the reaction itself will use.
+ */
+function tileIsWatched(map: GameMap, enemy: Unit): boolean {
+  for (const p of livingPlayers(map)) {
+    if (!p.overwatch) continue;
+    if (isSuppressed(p)) continue;
+    if (canShootTarget(map, p, enemy).canShoot) return true;
+  }
+  return false;
+}
+
+/** Would a step to (x,y) put `enemy` inside a player's overwatch? */
+function stepIsWatched(map: GameMap, enemy: Unit, x: number, y: number): boolean {
+  const origX = enemy.x;
+  const origY = enemy.y;
+  enemy.x = x;
+  enemy.y = y;
+  try {
+    return tileIsWatched(map, enemy);
+  } finally {
+    enemy.x = origX;
+    enemy.y = origY;
+  }
+}
+
+/**
  * Score a candidate destination tile for `enemy` heading toward `target`.
  * Higher is better. Uses a temporarily-relocated enemy to evaluate LoS, then
  * restores the original position before returning.
@@ -219,6 +268,18 @@ function scoreCandidate(
       if (shot.mode === "peek") {
         score += AI_SCORE_PEEK_EXPOSURE_RISK;
       }
+      // Going around a target's cover is worth more than the accuracy it
+      // restores, and it is the answer to a hunkered defender: hunkering only
+      // deepens cover that still faces the shooter.
+      if (exposedAgainst(map, enemy, target)) {
+        score += AI_SCORE_EXPOSES_TARGET;
+      }
+    }
+    // Walking into ground a watcher already covers now costs the enemy, and it
+    // costs for every step of the walk rather than only for crossing a
+    // visibility threshold, because that is how overwatch now triggers.
+    if (candidate.steps > 0 && tileIsWatched(map, enemy)) {
+      score += AI_SCORE_OVERWATCH_LANE;
     }
     const coverFromTarget = targetCoverPenalty(map, target, enemy);
     const coverWeight = enemy.aiBehavior === "sentinel" || enemy.aiBehavior === "marksman"
@@ -247,6 +308,21 @@ function scoreCandidate(
     enemy.x = origX;
     enemy.y = origY;
   }
+}
+
+/**
+ * Expected damage from shooting `target` right now. Reads the same preview the
+ * player's HUD does, so every new modifier - Aim, Hunker, Suppressed, Exposed -
+ * reaches the AI's target choice without being restated here.
+ */
+function shotValue(map: GameMap, enemy: Unit, target: Unit): number {
+  const preview = previewShot(map, enemy, target);
+  if (!preview.shot.canShoot) return -Infinity;
+  const expected = preview.hitChance * preview.damage;
+  // Finishing a wounded operator beats chipping a healthy one for the same
+  // expected damage.
+  const finisher = preview.damage >= target.hp ? preview.hitChance * 2 : 0;
+  return expected + finisher;
 }
 
 export function beginEnemyTurn(
@@ -287,15 +363,17 @@ export function takeEnemyAction(
   if (enemy.ap >= SHOOT_AP_COST) {
     const visible = visiblePlayers(map, enemy);
     if (visible.length > 0) {
-      // Prefer the persisted target if it's still visible; otherwise pick
-      // the visible player with the best hit chance.
+      // Prefer the persisted target if it's still visible; otherwise pick the
+      // visible player the shot is actually worth taking against. Expected
+      // damage rather than raw accuracy, so a hunkered defender behind a wall
+      // stops soaking fire that a flanked squadmate would take much harder.
       let best = visible.includes(target) ? target : visible[0];
-      let bestPenalty = shotHitPenalty(map, enemy, best);
+      let bestValue = shotValue(map, enemy, best);
       for (const p of visible) {
         if (p === best) continue;
-        const penalty = shotHitPenalty(map, enemy, p);
-        if (penalty < bestPenalty) {
-          bestPenalty = penalty;
+        const value = shotValue(map, enemy, p);
+        if (value > bestValue) {
+          bestValue = value;
           best = p;
         }
       }
@@ -323,17 +401,42 @@ export function takeEnemyAction(
     }
   }
 
+  const holdingPosition = bestCandidate !== null &&
+    bestCandidate.x === enemy.x &&
+    bestCandidate.y === enemy.y;
+
+  // Overwatch is now a fixed 2 AP commitment that leaves the rest of the turn
+  // intact, so a sentinel that sets one is no longer spending its whole turn.
   if (
     enemy.aiBehavior === "sentinel" &&
-    bestCandidate &&
-    bestCandidate.x === enemy.x &&
-    bestCandidate.y === enemy.y &&
-    enemy.ap > 0
+    holdingPosition &&
+    !enemy.overwatch &&
+    !isSuppressed(enemy) &&
+    enemy.ap >= OVERWATCH_AP_COST
   ) {
-    enemy.ap = 0;
-    enemy.overwatch = true;
-    return { kind: "overwatch" };
+    const outcome = performAction(map, enemy, "overwatch");
+    if (outcome.ok) return { kind: "overwatch" };
   }
+
+  // A defender that is going nowhere, is being looked at, and has terrain to
+  // press into should use it. Deliberately narrow: this is the AI knowing what
+  // Hunker is for, not the AI acquiring a full action repertoire.
+  if (
+    holdingPosition &&
+    (enemy.aiBehavior === "sentinel" || enemy.aiBehavior === "marksman") &&
+    !isHunkered(enemy) &&
+    enemy.ap >= HUNKER_AP_COST &&
+    hasAdjacentCover(map, enemy.x, enemy.y) &&
+    livingPlayers(map).some((p) => canShootTarget(map, p, enemy).canShoot)
+  ) {
+    const outcome = performAction(map, enemy, "hunker");
+    if (outcome.ok) return { kind: "hunker" };
+  }
+
+  // A unit that has committed to watching a lane stays on it. Without this the
+  // fallback route below would walk a sentinel straight off the position it
+  // just spent two action points to hold.
+  if (holdingPosition && enemy.overwatch) return { kind: "wait" };
 
   // If the best candidate is the current tile, fall back to A* toward an open
   // tile adjacent to the target (never the target's own tile).
@@ -344,10 +447,20 @@ export function takeEnemyAction(
       .map((d) => ({ x: target.x + d.x, y: target.y + d.y }))
       .filter((p) => isPassable(map, p.x, p.y));
     let bestRoute: AStarRoute | null = null;
+    let bestWatched = true;
     for (const a of adjacents) {
       const route = aStarRoute(map, enemy.x, enemy.y, a.x, a.y);
-      if (route && (!bestRoute || route.distance < bestRoute.distance)) {
+      if (!route) continue;
+      // Prefer any approach whose first step stays out of a watched lane; only
+      // accept a watched opening when every route starts inside one, so the
+      // squad advances instead of freezing in front of a single watcher.
+      const watched = stepIsWatched(map, enemy, route.next.x, route.next.y);
+      const better = bestRoute === null ||
+        (bestWatched && !watched) ||
+        (bestWatched === watched && route.distance < bestRoute.distance);
+      if (better) {
         bestRoute = route;
+        bestWatched = watched;
       }
     }
     if (!bestRoute) return { kind: "wait" };
@@ -377,7 +490,6 @@ export function takeEnemyAction(
   enemy.x = step.x;
   enemy.y = step.y;
   enemy.ap -= stepCost;
-  enemy.movesThisTurn = (enemy.movesThisTurn ?? 0) + 1;
-  enemy.peekExposure = null;
+  onUnitMoved(enemy);
   return { kind: "move", from, to: { x: enemy.x, y: enemy.y } };
 }

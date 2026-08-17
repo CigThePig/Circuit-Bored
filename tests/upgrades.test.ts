@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeArchetypeUnit } from "../src/content.ts";
 import { previewShot, resolveShot } from "../src/combat.ts";
-import { movementApCost, resetTurnState, TILES_PER_MOVE_AP } from "../src/rules.ts";
+import { movementApCost, beginUnitTurn, TILES_PER_MOVE_AP } from "../src/rules.ts";
 import { buildMap } from "./fixtures.ts";
 
 describe("combat upgrade integration", () => {
@@ -36,7 +36,7 @@ describe("combat upgrade integration", () => {
     expect(movementApCost(unit)).toBe(0);
     unit.movesThisTurn = TILES_PER_MOVE_AP;
     expect(movementApCost(unit)).toBe(1);
-    resetTurnState(unit);
+    beginUnitTurn(unit);
     expect(movementApCost(unit)).toBe(0);
   });
 

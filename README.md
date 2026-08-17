@@ -3,6 +3,43 @@
 A fast, browser-based tactical roguelike built around action points, cover,
 line of sight, corner peeking, committed exposure, and overwatch.
 
+## Combat actions
+
+A turn is not just move-and-shoot. Every deliberate action is a definition in
+`src/actions.ts` carrying its own cost, targeting, eligibility, preview text,
+and resolution, so the runtime asks what a unit can do rather than branching
+per action.
+
+| Action | AP | Target | Effect |
+| --- | --- | --- | --- |
+| Shoot | 2 | Hostile | The ordinary attack, bound to tapping a hostile. |
+| Aim | 1 | Self | The next shot gains accuracy. Cancelled by moving, spent by firing, gone at your next turn. |
+| Hunker | 1 | Self | Deepens adjacent cover until your next turn and drops your lean. Nearly worthless in the open. |
+| Suppress | 2 | Hostile | No damage. The target loses accuracy and an action point on its next turn, cannot prepare shots, and any overwatch it holds is broken. |
+| Overwatch | 2 | Self | One reaction shot at the first hostile that moves through ground you can shoot into. Remaining AP is kept. |
+
+Two positional rules give manoeuvre a payoff beyond restoring accuracy. A
+target is **Exposed** - worth extra accuracy and a point of damage - when it is
+using cover that does not face the shooter, when a squadmate bears on it from
+90 degrees or more away (**crossfire**), or when it has leaned out of cover and
+not yet moved. Standing in the open with no terrain nearby is not Exposed;
+being outmanoeuvred is.
+
+Temporary states live on the unit in `src/status.ts`, are cloned with the map,
+validated on load, and read by previews, resolution, and the AI through the
+same helpers. `tests/scenarios.test.ts` plays fixed boards with fixed dice to
+show that these decisions change outcomes.
+
+## Overwatch
+
+Overwatch is area control rather than a visibility transition. A watcher takes
+its reaction on any step that *ends* somewhere it has a valid firing solution -
+whether the mover emerged from cover or was already visible and moved anyway.
+Every wall, corner, and occupancy rule comes from the ordinary shooting
+relationship, so a watcher can never react through terrain it could not shoot
+through. Selecting a unit marks the tiles inside its movement radius that a
+hostile watcher already covers.
+
 ## Movement
 
 Units walk in eight directions. Selecting a unit marks every tile it can reach
@@ -28,8 +65,13 @@ continue to use their separate `circuit-bored.map.v1` format.
 ## Architecture
 
 - `src/combat.ts`, `src/ai.ts`, and `src/runtime.ts` contain the tactical match.
-- `src/rules.ts` owns the action-point economy; `src/movement.ts` owns walking
-  geometry and the reachable region both the player and the AI plan against.
+- `src/actions.ts` is the registry of non-movement combat actions; it is the
+  only place their AP is charged.
+- `src/status.ts` owns temporary tactical states and their sanitisation.
+- `src/rules.ts` owns the action-point economy and the turn lifecycle
+  (`beginUnitTurn`, `endUnitTurn`, `onUnitMoved`), which is where every status
+  duration is enforced. `src/movement.ts` owns walking geometry and the
+  reachable region both the player and the AI plan against.
 - `src/rng.ts` owns serializable seeded randomness.
 - `src/content.ts` is the registry for unit archetypes and upgrades.
 - `src/generation.ts` builds validated, connected tactical encounters.

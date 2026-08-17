@@ -110,6 +110,14 @@ export const VISUAL_REVIEW_CASES: ReviewCase[] = [
   makeCase({ sceneId: "overlays", cell: 28, note: "Minimum size: HP, AP, target, and threat must not collide." }),
   makeCase({ sceneId: "overlays", view: "grayscale", note: "Overlay priority without hue: gameplay cues outrank decoration." }),
 
+  // Tactical statuses are the newest gameplay cues on the board, and the ones
+  // most likely to collide with the HP chip, AP pips, and target pill that
+  // already occupy a unit's cell. They get the full readability sweep.
+  makeCase({ sceneId: "combat-states", note: "Status chips, Exposed markers, and watched ground beside the cues they share a cell with." }),
+  makeCase({ sceneId: "combat-states", cell: 28, note: "Minimum size: every status must stay identifiable and must not bury HP or AP." }),
+  makeCase({ sceneId: "combat-states", cell: 28, view: "grayscale", note: "Statuses must be separable by shape and letter with no hue at all." }),
+  makeCase({ sceneId: "combat-states", cell: 56, note: "Chip and marker construction inspected closely." }),
+
   makeCase({
     sceneId: "effects",
     times: [...EFFECT_STRIP_TIMES],

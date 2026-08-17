@@ -8,6 +8,7 @@ import {
   type LevelThemeId,
 } from "./themes.ts";
 import { cloneEnvironment, type MapEnvironment } from "./environment.ts";
+import { cloneStatuses, type UnitStatuses } from "./status.ts";
 
 export type TileType = "floor" | "wall" | "half_cover";
 
@@ -58,6 +59,11 @@ export type Unit = {
   maxAp: number;
   overwatch: boolean;
   peekExposure: { x: number; y: number } | null;
+  /**
+   * Temporary tactical states. Absent means "nothing active", so units from
+   * pre-status saves and hand-built fixtures need no migration.
+   */
+  statuses?: UnitStatuses;
   archetypeId?: string;
   displayName?: string;
   aiBehavior?: AiBehavior;
@@ -158,6 +164,9 @@ export function cloneMap(map: GameMap): GameMap {
     units: map.units.map((u) => ({
       ...u,
       peekExposure: u.peekExposure ? { ...u.peekExposure } : null,
+      // Statuses are gameplay state, so a cloned map must never share them
+      // with its source - the runtime clones the encounter every save.
+      statuses: cloneStatuses(u.statuses),
       combat: u.combat ? { ...u.combat } : undefined,
     })),
   };

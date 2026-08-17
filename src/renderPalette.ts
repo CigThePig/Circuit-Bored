@@ -107,6 +107,18 @@ export const PALETTE = {
   PREVIEW_SHIELD_OUTLINE: "rgba(0, 0, 0, 0.85)",
 
   FLOAT_STROKE: "rgba(0, 0, 0, 0.85)",
+
+  // Tactical statuses. Each also has its own glyph shape in the renderer, so
+  // colour is reinforcement and never the only carrier of meaning.
+  STATUS_PLATE: "rgba(6, 10, 15, 0.82)",
+  STATUS_PLATE_EDGE: "rgba(2, 5, 8, 0.9)",
+  AIM: "#8fe4ff",
+  HUNKER: "#79dfa6",
+  SUPPRESSED: "#ff9a4d",
+  EXPOSED: "#ff5f8d",
+  /** Enemy-controlled ground shown across the selected unit's move radius. */
+  WATCHED_LANE: "#ff7a52",
+  WATCHED_LANE_SOFT: "rgba(255, 122, 82, 0.20)",
 } as const;
 
 export type TerrainPalette = {

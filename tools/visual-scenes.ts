@@ -28,7 +28,9 @@ import { paintBoundary } from "../src/generationMotifs.ts";
 import { dominantLandmark, environmentProfile, type MapRect } from "../src/environment.ts";
 import { setTile, type GameMap } from "../src/map.ts";
 import { computeMovementField, movementDestinations } from "../src/movement.ts";
-import { previewShot } from "../src/combat.ts";
+import { applySuppression, previewShot, watchedTiles } from "../src/combat.ts";
+import { performAction } from "../src/actions.ts";
+import { beginUnitTurn } from "../src/rules.ts";
 import {
   projectileKindForUnit,
   type RenderState,
@@ -311,6 +313,120 @@ function overlayScene(): VisualScene {
   };
 }
 
+/**
+ * Every tactical status the combat rules can put on a unit, plus the two
+ * positional cues that belong to a target rather than to a unit.
+ *
+ * The statuses are set through the production rule layer rather than written
+ * onto the units by hand, and the Exposed markers come from `previewShot`, so
+ * this board cannot drift away from what the game actually computes. Nothing
+ * here is a hand-authored overlay pretending to be gameplay truth.
+ */
+function combatStatesScene(): VisualScene {
+  const map = emptyMap(15, 9);
+  for (let x = 0; x < map.width; x++) {
+    setTile(map, x, 0, "wall");
+    setTile(map, x, map.height - 1, "wall");
+  }
+  for (let y = 0; y < map.height; y++) {
+    setTile(map, 0, y, "wall");
+    setTile(map, map.width - 1, y, "wall");
+  }
+
+  // Row 2: the four self-applied states, side by side at the same scale.
+  setTile(map, 2, 1, "half_cover");
+  setTile(map, 5, 1, "half_cover");
+  const aimed = makeArchetypeUnit("operator", "states-aimed", 2, 2);
+  const hunkered = makeArchetypeUnit("bulwark", "states-hunkered", 5, 2);
+  const watching = makeArchetypeUnit("runner", "states-watching", 8, 2);
+  const pinned = makeArchetypeUnit("rifleman", "states-pinned", 11, 2);
+  map.units.push(aimed, hunkered, watching, pinned);
+  performAction(map, aimed, "aim");
+  performAction(map, hunkered, "hunker");
+  performAction(map, watching, "overwatch");
+  applySuppression(pinned);
+  // Start the pinned unit's turn so the board shows what a suppressed unit
+  // actually looks like when it acts: one fewer action point in its pips.
+  beginUnitTurn(pinned);
+
+  // A short spine so the hostile watch below covers only part of the movement
+  // radius. Without it the watcher sees every reachable tile and the review
+  // cannot judge watched ground against unwatched ground.
+  for (let y = 3; y <= 5; y++) setTile(map, 7, y, "wall");
+
+  // Row 6: one hostile flanked by geometry and one caught in a crossfire, so
+  // the Exposed marker can be judged against a target that is merely covered.
+  setTile(map, 5, 5, "half_cover");
+  const flanked = makeArchetypeUnit("marksman", "states-flanked", 5, 6);
+  const crossfired = makeArchetypeUnit("sentinel", "states-crossfire", 10, 6);
+  const shooter = makeArchetypeUnit("operator", "states-shooter", 5, 7);
+  const partner = makeArchetypeUnit("runner", "states-partner", 12, 6);
+  const anchor = makeArchetypeUnit("bulwark", "states-anchor", 8, 6);
+  map.units.push(flanked, crossfired, shooter, partner, anchor);
+  // A hostile also holds a watch, so the watched-lane cue has something real
+  // to sit on inside the selected operator's movement radius.
+  performAction(map, crossfired, "overwatch");
+
+  const state = emptyState(map);
+  state.selected = shooter;
+  const field = computeMovementField(map, shooter);
+  state.moveRange = {
+    originX: shooter.x,
+    originY: shooter.y,
+    tiles: movementDestinations(shooter, field),
+  };
+  state.watchedTiles = watchedTiles(
+    map,
+    crossfired,
+    shooter,
+    state.moveRange.tiles,
+  );
+
+  for (const target of [flanked, crossfired]) {
+    const preview = previewShot(map, shooter, target);
+    if (!preview.shot.canShoot) {
+      throw new Error(`Combat-state target ${target.id} has no production firing line`);
+    }
+    state.highlights.push({
+      x: target.x,
+      y: target.y,
+      fill: "rgba(255, 80, 80, 0.55)",
+      border: "rgba(255, 80, 80, 1)",
+    });
+    state.enemyPreviews.push({
+      x: target.x,
+      y: target.y,
+      hitPct: Math.round(preview.hitChance * 100),
+      hasCover: preview.hadCover,
+      exposed: preview.exposed !== null,
+      damage: preview.damage,
+    });
+    state.sightLines!.push({
+      fromX: preview.shot.from.x,
+      fromY: preview.shot.from.y,
+      toX: preview.targetPoint.x,
+      toY: preview.targetPoint.y,
+      hasCover: preview.hadCover,
+      shooterX: shooter.x,
+      shooterY: shooter.y,
+      mode: preview.shot.mode === "peek" ? "peek" : "direct",
+    });
+  }
+
+  return {
+    id: "combat-states",
+    title: "Tactical state matrix",
+    description:
+      "Aimed, hunkered, overwatching, and suppressed units beside a flanked target, " +
+      "a crossfired target, and the enemy-watched tiles inside a movement radius.",
+    review:
+      "Each status chip should be identifiable at 28 px and in grayscale without reading its colour, " +
+      "the Exposed arrows should read as 'caught between angles' rather than as another badge, " +
+      "watched ground should stay legible as walkable, and no cue may cover a face, weapon, HP, or AP.",
+    state,
+  };
+}
+
 function effectsScene(): VisualScene {
   const map = emptyMap(15, 13);
   const archetypes: UnitArchetypeId[] = ["runner", "operator", "scrapper", "marksman", "sentinel"];
@@ -427,6 +543,7 @@ export function buildVisualScenes(): VisualScene[] {
     terrainScene(),
     unitScene(),
     overlayScene(),
+    combatStatesScene(),
     effectsScene(),
     foundryGalleryScene(),
     dataCoreGalleryScene(),

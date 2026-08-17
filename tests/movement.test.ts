@@ -11,7 +11,7 @@ import {
   movementApCost,
   movementApCostForTiles,
   movementRange,
-  resetTurnState,
+  beginUnitTurn,
   TILES_PER_MOVE_AP,
 } from "../src/rules.ts";
 import { makeArchetypeUnit } from "../src/content.ts";
@@ -73,7 +73,7 @@ describe("movement budget", () => {
     mover.movesThisTurn = 8;
     expect(movementRange(mover)).toBe(0);
     expect(isSpent(mover)).toBe(true);
-    resetTurnState(mover);
+    beginUnitTurn(mover);
     expect(movementRange(mover)).toBe(8);
   });
 

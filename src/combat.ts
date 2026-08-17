@@ -1,11 +1,44 @@
 import type { GameMap, Unit } from "./map.ts";
 import { getTile, inBounds, unitAt } from "./map.ts";
+import {
+  isAimed,
+  isHunkered,
+  isSuppressed,
+  setAimed,
+  setSuppressed,
+  SUPPRESSION_TURNS,
+} from "./status.ts";
 
 export const BASE_HIT = 0.85;
 export const COVER_PENALTY = 0.4;
 export const HALF_COVER_PENALTY = 0.18;
 export const PEEK_PENALTY = 0.3;
 export const SHOT_DAMAGE = 3;
+
+/**
+ * Tactical tuning.
+ *
+ * These are calibrated against BASE_HIT and the cover penalties above rather
+ * than picked in isolation: Aim is worth a little more than half a wall, a
+ * hunkered wall is close to unshootable, suppression costs a target roughly a
+ * third of its accuracy, and a flank is worth an extra point of damage plus a
+ * small accuracy edge. `tests/scenarios.test.ts` is what keeps these honest.
+ */
+export const AIM_ACCURACY_BONUS = 0.25;
+/** Extra cover penalty a hunkered target adds, only where cover actually applies. */
+export const HUNKER_COVER_BONUS = 0.25;
+/** Token benefit for hunkering with no cover, so the button is never armour. */
+export const HUNKER_OPEN_BONUS = 0.05;
+export const SUPPRESSED_ACCURACY_PENALTY = 0.3;
+export const EXPOSED_ACCURACY_BONUS = 0.1;
+export const EXPOSED_DAMAGE_BONUS = 1;
+/**
+ * Crossfire threshold as the cosine between two shooters' approach vectors.
+ * Zero means the angle must be at least 90 degrees, so two operators standing
+ * on genuinely different sides qualify and two standing shoulder to shoulder
+ * never do.
+ */
+export const CROSSFIRE_MAX_COSINE = 0;
 
 export function bresenhamLine(
   x0: number,
@@ -441,22 +474,59 @@ export function hasShotLineOfSight(
   return false;
 }
 
+export type OverwatchTrigger = "emergence" | "watched_movement";
+
+export type OverwatchCheck = {
+  fires: boolean;
+  trigger: OverwatchTrigger | null;
+  /** Could the watcher shoot the mover where the step started? */
+  sawBefore: boolean;
+  /** Can the watcher shoot the mover where the step ended? */
+  seesAfter: boolean;
+};
+
 /**
- * Overwatch reaction predicate: was the mover hidden at `from` and visible
- * at `to` from the watcher's perspective using strict LoS / peek rules?
+ * Does `watcher` get its reaction shot on a completed step from `from` to `to`?
  *
- * Peek exposure on the mover is intentionally ignored here - overwatch must
- * depend only on movement and real visibility, not on a transient silhouette.
+ * Overwatch is area control, not a visibility edge case. A watcher covers the
+ * ground it can actually shoot into, so any step that *ends* somewhere the
+ * watcher has a valid firing solution triggers the reaction:
+ *
+ * - `emergence`: the mover was unshootable at `from` and is shootable at `to`,
+ *   which is the old trigger and still the most common one.
+ * - `watched_movement`: the mover was already shootable and moved anyway,
+ *   which is what turns a covered corridor into a lane the enemy has to
+ *   respect rather than a threshold it only pays for once.
+ *
+ * The shooting relationship is the ordinary one, so every wall, corner, and
+ * occupancy safeguard in `canShootTarget` applies unchanged and a watcher can
+ * never react through terrain it could not shoot through.
+ *
+ * Peek exposure on the mover is deliberately ignored: a reaction must depend
+ * on real movement and real visibility, not on a transient silhouette the
+ * mover committed to on an earlier turn.
  */
-export function overwatchShouldFire(
+export function checkOverwatch(
   map: GameMap,
   watcher: Unit,
   mover: Unit,
   from: { x: number; y: number },
   to: { x: number; y: number },
-): boolean {
-  if (!watcher.overwatch) return false;
-  if (watcher.hp <= 0) return false;
+): OverwatchCheck {
+  const idle: OverwatchCheck = {
+    fires: false,
+    trigger: null,
+    sawBefore: false,
+    seesAfter: false,
+  };
+  if (!watcher.overwatch) return idle;
+  if (watcher.hp <= 0) return idle;
+  if (mover.hp <= 0) return idle;
+  // A suppressed watcher is keeping its head down, not covering a lane.
+  if (isSuppressed(watcher)) return idle;
+  // Standing still is not movement through controlled space.
+  if (from.x === to.x && from.y === to.y) return idle;
+
   const originalX = mover.x;
   const originalY = mover.y;
   const originalExposure = mover.peekExposure;
@@ -470,13 +540,65 @@ export function overwatchShouldFire(
     const sawBefore = canShootTarget(map, watcher, mover).canShoot;
     mover.x = to.x;
     mover.y = to.y;
-    const seesNow = canShootTarget(map, watcher, mover).canShoot;
-    return !sawBefore && seesNow;
+    const seesAfter = canShootTarget(map, watcher, mover).canShoot;
+    if (!seesAfter) {
+      return { fires: false, trigger: null, sawBefore, seesAfter };
+    }
+    return {
+      fires: true,
+      trigger: sawBefore ? "watched_movement" : "emergence",
+      sawBefore,
+      seesAfter,
+    };
   } finally {
     mover.x = originalX;
     mover.y = originalY;
     mover.peekExposure = originalExposure;
   }
+}
+
+/** Boolean form of `checkOverwatch` for callers that only need yes or no. */
+export function overwatchShouldFire(
+  map: GameMap,
+  watcher: Unit,
+  mover: Unit,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): boolean {
+  return checkOverwatch(map, watcher, mover, from, to).fires;
+}
+
+/**
+ * Every tile in `tiles` a watcher on overwatch would react to, given the mover
+ * arriving there from an adjacent tile. Used by the AI to price a route and by
+ * the HUD to explain why a lane is dangerous; it never mutates the map.
+ */
+export function watchedTiles(
+  map: GameMap,
+  watcher: Unit,
+  mover: Unit,
+  tiles: readonly { x: number; y: number }[],
+): { x: number; y: number }[] {
+  if (!watcher.overwatch || watcher.hp <= 0 || isSuppressed(watcher)) return [];
+  const out: { x: number; y: number }[] = [];
+  const originalX = mover.x;
+  const originalY = mover.y;
+  const originalExposure = mover.peekExposure;
+  try {
+    mover.peekExposure = null;
+    for (const tile of tiles) {
+      mover.x = tile.x;
+      mover.y = tile.y;
+      if (canShootTarget(map, watcher, mover).canShoot) {
+        out.push({ x: tile.x, y: tile.y });
+      }
+    }
+  } finally {
+    mover.x = originalX;
+    mover.y = originalY;
+    mover.peekExposure = originalExposure;
+  }
+  return out;
 }
 
 /**
@@ -529,6 +651,100 @@ export function targetHasCover(
 }
 
 /**
+ * Why a target is Exposed to a particular shooter.
+ *
+ * Exposed is derived from geometry every time it is asked for rather than
+ * stored on the unit, so a preview and the shot that follows it can never
+ * disagree, and so no code path has to remember to clear it.
+ */
+export type ExposedReason = "flanked" | "crossfire" | "committed_peek";
+
+const ADJACENT_COVER_DIRECTIONS: readonly { dx: number; dy: number }[] = [
+  { dx: 1, dy: 0 },
+  { dx: -1, dy: 0 },
+  { dx: 0, dy: 1 },
+  { dx: 0, dy: -1 },
+];
+
+/** True when the unit is standing against terrain that can protect it at all. */
+export function hasAdjacentCover(map: GameMap, x: number, y: number): boolean {
+  for (const d of ADJACENT_COVER_DIRECTIONS) {
+    const t = getTile(map, x + d.dx, y + d.dy);
+    if (t === "wall" || t === "half_cover") return true;
+  }
+  return false;
+}
+
+/**
+ * True when `a` and `b` bear on `target` from materially different angles.
+ * Purely positional: no facing, no cones, just the angle between the two
+ * approach vectors measured at the target.
+ */
+export function isCrossfireAngle(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  target: { x: number; y: number },
+): boolean {
+  const ax = a.x - target.x;
+  const ay = a.y - target.y;
+  const bx = b.x - target.x;
+  const by = b.y - target.y;
+  const aLen = Math.hypot(ax, ay);
+  const bLen = Math.hypot(bx, by);
+  if (aLen === 0 || bLen === 0) return false;
+  const cosine = (ax * bx + ay * by) / (aLen * bLen);
+  return cosine <= CROSSFIRE_MAX_COSINE;
+}
+
+/**
+ * Whether `target` is Exposed to `shooter`, and why. Returns null for the
+ * ordinary case, including a target simply standing in the open: walking into
+ * a room without cover is not the same achievement as manoeuvring around cover
+ * that was working a moment ago.
+ *
+ * The three triggers are all things the player did with position:
+ * - `flanked`: the target is using terrain, but not against this shooter.
+ * - `crossfire`: a squadmate also bears on the target from 90 degrees or more
+ *   away, so the target cannot orient against both.
+ * - `committed_peek`: the target leaned out of cover to take its own shot and
+ *   has not moved since.
+ */
+export function exposedAgainst(
+  map: GameMap,
+  shooter: Unit,
+  target: Unit,
+): ExposedReason | null {
+  if (target.hp <= 0) return null;
+  if (
+    hasAdjacentCover(map, target.x, target.y) &&
+    targetCoverPenalty(map, shooter, target) === 0
+  ) {
+    return "flanked";
+  }
+  if (validCommittedExposure(map, target)) return "committed_peek";
+  for (const ally of map.units) {
+    if (ally.hp <= 0) continue;
+    if (ally.id === shooter.id) continue;
+    if (ally.team !== shooter.team) continue;
+    if (!isCrossfireAngle(ally, shooter, target)) continue;
+    if (!canShootTarget(map, ally, target).canShoot) continue;
+    return "crossfire";
+  }
+  return null;
+}
+
+/**
+ * Apply Suppressed to a unit. Breaking an established overwatch is part of the
+ * effect: suppression is how a squad buys safe passage through a lane it does
+ * not want to walk into, which only works if it actually clears the watch.
+ */
+export function applySuppression(target: Unit): void {
+  setSuppressed(target, SUPPRESSION_TURNS);
+  target.overwatch = false;
+  target.peekExposure = null;
+}
+
+/**
  * Effective hit-chance penalty for a shot. Uses canShootTarget for the
  * geometry: if blocked, returns Infinity (caller should clamp via resolveShot).
  * For a direct shot, the penalty is just the target's cover penalty. For a
@@ -571,7 +787,25 @@ export type ShotPreview = {
   hitChance: number;
   hadCover: boolean;
   targetPoint: { x: number; y: number };
+  /** Why the target is Exposed to this shooter, or null. */
+  exposed: ExposedReason | null;
+  /** Extra damage this shot would deal on top of the shooter's base damage. */
+  bonusDamage: number;
+  /** Damage this shot deals if it hits, after the target's reduction. */
+  damage: number;
+  /** True when the shooter's prepared Aim would be spent on this shot. */
+  usesAim: boolean;
+  /** True when the target's Hunker is contributing to the defence. */
+  targetHunkered: boolean;
+  /** True when the shooter is firing under Suppressed. */
+  shooterSuppressed: boolean;
 };
+
+/** Damage a hit from `shooter` deals to `target`, before Exposed bonuses. */
+function baseShotDamage(shooter: Unit): number {
+  return SHOT_DAMAGE + (shooter.combat?.damageBonus ?? 0) +
+    (shooter.resolvingOverwatch ? shooter.combat?.overwatchDamageBonus ?? 0 : 0);
+}
 
 /** Single source of truth for UI previews and actual shot resolution. */
 export function previewShot(
@@ -585,6 +819,12 @@ export function previewShot(
     : 0;
   const profile = shooter.combat;
   const targetProfile = target.combat;
+  const hunkered = isHunkered(target);
+  // Hunkering buys depth in real terrain. With no cover to deepen it is worth
+  // almost nothing, which is what stops it becoming an armour button.
+  const hunkerBonus = hunkered
+    ? (cover > 0 ? HUNKER_COVER_BONUS : HUNKER_OPEN_BONUS)
+    : 0;
   const defendedCover = cover > 0
     ? cover + (targetProfile?.coverDefenseBonus ?? 0)
     : 0;
@@ -592,7 +832,7 @@ export function previewShot(
     ? Math.max(0, PEEK_PENALTY - (profile?.peekPenaltyReduction ?? 0))
     : 0;
   const penalty = shot.canShoot
-    ? defendedCover + peekPenalty
+    ? defendedCover + peekPenalty + hunkerBonus
     : Infinity;
   let accuracyBonus = profile?.accuracyBonus ?? 0;
   if (cover === 0) accuracyBonus += profile?.uncoveredAccuracyBonus ?? 0;
@@ -608,6 +848,13 @@ export function previewShot(
   if (shooter.resolvingOverwatch) {
     accuracyBonus += profile?.overwatchAccuracyBonus ?? 0;
   }
+  const usesAim = shot.canShoot && isAimed(shooter);
+  if (usesAim) accuracyBonus += AIM_ACCURACY_BONUS;
+  const shooterSuppressed = isSuppressed(shooter);
+  if (shooterSuppressed) accuracyBonus -= SUPPRESSED_ACCURACY_PENALTY;
+  const exposed = shot.canShoot ? exposedAgainst(map, shooter, target) : null;
+  if (exposed) accuracyBonus += EXPOSED_ACCURACY_BONUS;
+  const bonusDamage = exposed ? EXPOSED_DAMAGE_BONUS : 0;
   const targetPoint = shot.targetExposure && target.peekExposure
     ? { ...target.peekExposure }
     : { x: target.x, y: target.y };
@@ -618,6 +865,15 @@ export function previewShot(
       : 0,
     hadCover: shot.canShoot && cover > 0,
     targetPoint,
+    exposed,
+    bonusDamage,
+    damage: Math.max(
+      1,
+      baseShotDamage(shooter) + bonusDamage - (target.combat?.damageReduction ?? 0),
+    ),
+    usesAim,
+    targetHunkered: hunkered && cover > 0,
+    shooterSuppressed,
   };
 }
 
@@ -631,6 +887,10 @@ export type ShotResult = {
   from: { x: number; y: number };
   targetPoint: { x: number; y: number };
   peekShoulder?: { x: number; y: number };
+  /** Why the target was Exposed, or null. Mirrors the preview exactly. */
+  exposed: ExposedReason | null;
+  /** True when a prepared Aim was spent on this shot. */
+  usedAim: boolean;
 };
 
 export function resolveShot(
@@ -643,14 +903,12 @@ export function resolveShot(
   const { shot, hitChance, hadCover } = preview;
   const roll = shot.canShoot ? rng() : 1;
   const hit = shot.canShoot && roll < hitChance;
-  const rawDamage = SHOT_DAMAGE + (shooter.combat?.damageBonus ?? 0) +
-    (shooter.resolvingOverwatch ? shooter.combat?.overwatchDamageBonus ?? 0 : 0);
-  const damage = hit
-    ? Math.max(1, rawDamage - (target.combat?.damageReduction ?? 0))
-    : 0;
+  const damage = hit ? preview.damage : 0;
   if (shot.canShoot) {
     shooter.shotsThisTurn = (shooter.shotsThisTurn ?? 0) + 1;
     shooter.encounterShots = (shooter.encounterShots ?? 0) + 1;
+    // Aim is a prepared shot, so it is spent whether or not the shot lands.
+    if (preview.usesAim) setAimed(shooter, false);
   }
   if (hit) {
     const wasAlive = target.hp > 0;
@@ -691,5 +949,7 @@ export function resolveShot(
     from: { ...shot.from },
     targetPoint: { ...preview.targetPoint },
     peekShoulder: shot.peekShoulder ? { ...shot.peekShoulder } : undefined,
+    exposed: preview.exposed,
+    usedAim: preview.usesAim,
   };
 }
