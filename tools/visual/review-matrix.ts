@@ -110,6 +110,33 @@ export const VISUAL_REVIEW_CASES: ReviewCase[] = [
   makeCase({ sceneId: "overlays", cell: 28, note: "Minimum size: HP, AP, target, and threat must not collide." }),
   makeCase({ sceneId: "overlays", view: "grayscale", note: "Overlay priority without hue: gameplay cues outrank decoration." }),
 
+  // Tactical statuses are the newest gameplay cues on the board, and the ones
+  // most likely to collide with the HP chip, AP pips, and target pill that
+  // already occupy a unit's cell. They get the full readability sweep.
+  makeCase({ sceneId: "combat-states", note: "Status chips, Exposed markers, and watched ground beside the cues they share a cell with." }),
+  makeCase({ sceneId: "combat-states", cell: 28, note: "Minimum size: every status must stay identifiable and must not bury HP or AP." }),
+  makeCase({ sceneId: "combat-states", cell: 28, view: "grayscale", note: "Statuses must be separable by shape and letter with no hue at all." }),
+  makeCase({ sceneId: "combat-states", cell: 56, note: "Chip and marker construction inspected closely." }),
+
+  // Operator identity has to survive the same squint the archetypes do: if
+  // three roles read as one silhouette with different badges, the pass failed.
+  makeCase({ sceneId: "operator-roles", note: "Mark, relay, dash, guard tether, and brace on one board." }),
+  makeCase({ sceneId: "operator-roles", cell: 28, note: "Minimum size: role cues must not bury HP, AP, or the hit-chance pill." }),
+  makeCase({ sceneId: "operator-roles", view: "grayscale", note: "Roles must separate by shape and letter with no hue." }),
+
+  // Intent is the densest new text on the board and the most likely to turn it
+  // into a wall of labels, so it gets both extremes plus an animation strip for
+  // the locked-on pulse.
+  makeCase({ sceneId: "enemy-intent", note: "Four published plans at once: readable, and not covering their own units." }),
+  makeCase({ sceneId: "enemy-intent", cell: 28, note: "Minimum size: banners must stay legible without hiding the board." }),
+  makeCase({ sceneId: "enemy-intent", view: "squint", note: "The locked-on Marksman must win attention when detail is destroyed." }),
+  makeCase({
+    sceneId: "enemy-intent",
+    times: [0, 450, 900],
+    idPrefix: "enemy-intent-pulse",
+    note: "Pulse strip: the lock should read as urgent without flickering distractingly.",
+  }),
+
   makeCase({
     sceneId: "effects",
     times: [...EFFECT_STRIP_TIMES],
@@ -218,6 +245,33 @@ export function buildSampleCases(seedsPerCombination: number): ReviewCase[] {
 /** Every distinct lab scene the given cases require. */
 export function requiredSceneIds(cases: readonly ReviewCase[]): string[] {
   return [...new Set(cases.map((entry) => entry.sceneId))].filter((id) => id !== SEED_SCENE_ID);
+}
+
+/**
+ * Split cases into the ones an older build can render and the scenes it has
+ * never heard of.
+ *
+ * A branch that adds a lab scene asks the baseline commit to render something
+ * that did not exist there, which the lab treats as a hard error. Rendering a
+ * "before" image for a brand-new scene is meaningless anyway, so those cases
+ * are set aside and reported instead of crashing the run - the review is
+ * supposed to inform a judgement, not gate a merge on one.
+ */
+export function partitionByKnownScenes(
+  cases: readonly ReviewCase[],
+  knownSceneIds: readonly string[],
+): { renderable: ReviewCase[]; newSceneIds: string[] } {
+  const known = new Set(knownSceneIds);
+  const renderable: ReviewCase[] = [];
+  const newSceneIds: string[] = [];
+  for (const entry of cases) {
+    if (known.has(entry.sceneId)) {
+      renderable.push(entry);
+    } else if (!newSceneIds.includes(entry.sceneId)) {
+      newSceneIds.push(entry.sceneId);
+    }
+  }
+  return { renderable, newSceneIds };
 }
 
 /** Expand one case into the concrete capture requests it produces. */

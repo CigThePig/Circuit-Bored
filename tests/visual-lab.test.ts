@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { UNIT_ARCHETYPES } from "../src/content.ts";
-import { previewShot } from "../src/combat.ts";
+import { exposedAgainst, previewShot } from "../src/combat.ts";
+import {
+  guardedBy,
+  isAimed,
+  isBraced,
+  isDashing,
+  isHunkered,
+  isMarked,
+  isSuppressed,
+} from "../src/status.ts";
+import { activeGuardian } from "../src/combat.ts";
+import { intentLabel } from "../src/intent.ts";
+import { planEnemyIntent } from "../src/ai.ts";
 import { validateMap } from "../src/validation.ts";
 import { dominantLandmark, LANDMARK_KINDS } from "../src/environment.ts";
 import { generatedEncounterDiagnostics } from "../src/generation.ts";
@@ -16,6 +28,9 @@ describe("visual laboratory", () => {
       "terrain",
       "units",
       "overlays",
+      "combat-states",
+      "operator-roles",
+      "enemy-intent",
       "effects",
       "landmarks-foundry",
       "landmarks-data-core",
@@ -32,6 +47,94 @@ describe("visual laboratory", () => {
       expect(scene.description.length).toBeGreaterThan(20);
       expect(scene.review.length).toBeGreaterThan(20);
     }
+  });
+
+  it("carries every tactical state as real gameplay state, not as an overlay", () => {
+    const scene = buildVisualScenes().find((s) => s.id === "combat-states")!;
+    const state = scene.state;
+    const units = state.map.units;
+    // Statuses must live on the units, so the renderer reads the same truth
+    // combat resolution does rather than a hand-drawn approximation.
+    expect(units.some((u) => isAimed(u))).toBe(true);
+    expect(units.some((u) => isHunkered(u))).toBe(true);
+    expect(units.some((u) => isSuppressed(u))).toBe(true);
+    expect(units.some((u) => u.overwatch)).toBe(true);
+    expect(validateMap(state.map).hasErrors).toBe(false);
+
+    // Both positional cues are present, and at least one target is deliberately
+    // not Exposed so the marker can be judged against its absence.
+    const previews = state.enemyPreviews;
+    expect(previews.length).toBeGreaterThanOrEqual(2);
+    expect(previews.some((p) => p.exposed)).toBe(true);
+    const shooter = state.selected!;
+    const reasons = previews.map((p) => {
+      const target = units.find((u) => u.x === p.x && u.y === p.y)!;
+      return exposedAgainst(state.map, shooter, target);
+    });
+    expect(reasons).toContain("flanked");
+    expect(reasons).toContain("crossfire");
+
+    // Every previewed number must match what the combat rules would compute.
+    for (const preview of previews) {
+      const target = units.find((u) => u.x === preview.x && u.y === preview.y)!;
+      const truth = previewShot(state.map, shooter, target);
+      expect(preview.hitPct).toBe(Math.round(truth.hitChance * 100));
+      expect(preview.damage).toBe(truth.damage);
+      expect(preview.exposed).toBe(truth.exposed !== null);
+    }
+
+    // Watched ground must be a subset of the drawn movement radius, or the
+    // hazard ticks would sit on tiles the player was never offered.
+    const reachable = new Set(state.moveRange!.tiles.map((t) => `${t.x},${t.y}`));
+    expect(state.watchedTiles!.length).toBeGreaterThan(0);
+    for (const tile of state.watchedTiles!) {
+      expect(reachable.has(`${tile.x},${tile.y}`)).toBe(true);
+    }
+    // Some of the radius must stay unwatched, or the review cannot judge the
+    // hazard mark against the ordinary walkable ground it sits beside.
+    expect(state.watchedTiles!.length).toBeLessThan(reachable.size);
+  });
+
+  it("builds operator roles and enemy intent from production rules only", () => {
+    const scenes = buildVisualScenes();
+
+    const roles = scenes.find((s) => s.id === "operator-roles")!.state;
+    const byName = (name: string) => roles.map.units.find((u) => u.displayName === name)!;
+    // Every role state must be real gameplay state applied by the real action,
+    // or the review would be judging a drawing rather than the game.
+    expect(isMarked(byName("Rifleman"))).toBe(true);
+    expect(isDashing(byName("Vex"))).toBe(true);
+    expect(isBraced(byName("Hex"))).toBe(true);
+    expect(guardedBy(byName("Vex"))).toBe(byName("Hex").id);
+    // Rook relayed a point away, so it is down one and Vex is up one.
+    expect(byName("Rook").ap).toBeLessThan(byName("Rook").maxAp);
+    expect(validateMap(roles.map).hasErrors).toBe(false);
+    // A drawn guard tether must mean protection the damage step would apply.
+    expect(roles.guardLinks).toHaveLength(1);
+    expect(activeGuardian(roles.map, byName("Vex"))?.id).toBe(byName("Hex").id);
+
+    const intents = scenes.find((s) => s.id === "enemy-intent")!.state;
+    const enemies = intents.map.units.filter((u) => u.team === "enemy");
+    // Banners must match the planner's stored output exactly - the lab is not
+    // allowed to invent, reword, or reorder a plan.
+    for (const enemy of enemies) {
+      expect(enemy.intent).toBeDefined();
+      const marker = intents.intentMarkers!.find((m) => m.x === enemy.x && m.y === enemy.y);
+      const label = intentLabel(
+        enemy.intent,
+        intents.map.units.find((u) => u.id === enemy.intent!.targetId)?.displayName ?? null,
+      );
+      expect(marker?.label ?? null).toBe(label);
+      expect(planEnemyIntent(intents.map, enemy)).toEqual(enemy.intent);
+    }
+    // The telegraph is the point: exactly one plan is urgent, and it threads to
+    // the operator it has settled on.
+    const urgent = intents.intentMarkers!.filter((m) => m.urgent);
+    expect(urgent).toHaveLength(1);
+    expect(urgent[0].toX).toBeDefined();
+    // Several different plans on screen at once, so the review can judge them
+    // together rather than one at a time.
+    expect(new Set(enemies.map((e) => e.intent!.kind)).size).toBeGreaterThanOrEqual(3);
   });
 
   it("covers every projectile family plus peek, hit, and miss animation states", () => {

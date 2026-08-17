@@ -351,7 +351,16 @@ function rehydrateMap(
       unit.aiBehavior = UNIT_ARCHETYPES[archetypeId].behavior;
       unit.combat = buildCombatProfile(archetypeId);
     }
-    const counter = (key: "movesThisTurn" | "shotsThisTurn" | "killsThisTurn" | "encounterShots") => {
+    const counter = (
+      key:
+        | "movesThisTurn"
+        | "shotsThisTurn"
+        | "killsThisTurn"
+        | "encounterShots"
+        | "overwatchShotsUsed"
+        | "relaysThisTurn"
+        | "flankRefundsThisTurn",
+    ) => {
       const value = isObject(rawUnit) ? rawUnit[key] : 0;
       return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1000 ? value as number : 0;
     };
@@ -360,6 +369,9 @@ function rehydrateMap(
     unit.killsThisTurn = counter("killsThisTurn");
     unit.encounterShots = counter("encounterShots");
     unit.resolvingOverwatch = false;
+    unit.overwatchShotsUsed = counter("overwatchShotsUsed");
+    unit.relaysThisTurn = counter("relaysThisTurn");
+    unit.flankRefundsThisTurn = counter("flankRefundsThisTurn");
     if (isObject(rawUnit) && isObject(rawUnit.peekExposure)) {
       const px = rawUnit.peekExposure.x;
       const py = rawUnit.peekExposure.y;

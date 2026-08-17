@@ -168,9 +168,14 @@
         width: 100%;
         /* Keep the tactical board itself scrollable on short screens. The HUD
            remains below this viewport instead of being pushed past the board's
-           selected unit when a layout puts the squad near the bottom edge. */
-        height: min(672px, max(240px, calc(100vh - 164px)));
-        height: min(672px, max(240px, calc(100dvh - 164px)));
+           selected unit when a layout puts the squad near the bottom edge.
+           The reserve covers the top bar plus the tallest the HUD gets: two
+           status lines, the action tray wrapped to two rows for an operator
+           with role abilities, a wrapped hint line, and the End Turn row. End
+           Turn must stay on screen without scrolling, so this number is
+           measured against the real panel rather than estimated. */
+        height: min(600px, max(240px, calc(100vh - 300px)));
+        height: min(600px, max(240px, calc(100dvh - 300px)));
         isolation: isolate;
         overflow: auto;
         overscroll-behavior: contain;
@@ -287,6 +292,65 @@
         letter-spacing: 0.04em;
         position: relative;
       }
+      /*
+       * Combat action tray. Every button carries its own name and AP cost, so
+       * the row stays readable without a legend and nothing depends on colour
+       * alone. It wraps rather than scrolling: on a narrow phone the four
+       * actions fall into two rows instead of shrinking below a tap target.
+       */
+      .action-tray {
+        gap: 6px;
+      }
+      .action-tray .action-button {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        flex: 1 1 68px;
+        min-height: 44px;
+        padding: 6px 8px;
+        line-height: 1.1;
+      }
+      .action-tray .action-name {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      .action-tray .action-cost {
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        text-transform: none;
+      }
+      /* An armed action is outlined and underlined, never colour-only. */
+      .action-tray .action-button.active {
+        border-color: var(--cyan);
+        color: var(--cyan);
+        box-shadow: inset 0 0 10px var(--cyan-glow);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .action-tray .action-button.active .action-cost {
+        color: var(--cyan);
+      }
+      .action-tray .action-button:disabled .action-cost {
+        color: var(--text-disabled);
+      }
+      /* Intel costs nothing and changes what a tap means rather than spending
+         a turn, so it reads as a mode switch instead of another action. */
+      .action-tray .intel-button {
+        flex: 0 1 62px;
+        border-style: dashed;
+      }
+      .action-tray .intel-button .action-cost {
+        font-style: italic;
+      }
+      /* Collapses to nothing when empty so the panel never reserves dead
+         space above the End Turn button. */
+      .action-hint {
+        font-size: 11px;
+        line-height: 1.25;
+      }
+      .action-hint:empty { display: none; }
       .overlay {
         position: absolute;
         inset: 0;

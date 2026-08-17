@@ -100,6 +100,13 @@ export type BaselineRecord = {
   subject: string;
   generatedAt: string;
   caseIds: string[];
+  /**
+   * Scenes that exist on this branch but not at the base commit, so they were
+   * deliberately not rendered. Recorded so a later run can tell "no baseline
+   * because the scene is new" apart from "no baseline because the cache is
+   * stale" and reuse the cache instead of re-rendering everything.
+   */
+  newSceneIds?: string[];
 };
 
 export function readBaselineRecord(baselineDir: string): BaselineRecord | null {

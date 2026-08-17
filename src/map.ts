@@ -8,12 +8,15 @@ import {
   type LevelThemeId,
 } from "./themes.ts";
 import { cloneEnvironment, type MapEnvironment } from "./environment.ts";
+import { cloneStatuses, type UnitStatuses } from "./status.ts";
+import { cloneIntent, type EnemyIntent } from "./intent.ts";
+import { EMPTY_RANGE_PROFILE, type RangeProfile } from "./range.ts";
 
 export type TileType = "floor" | "wall" | "half_cover";
 
 export type AiBehavior = "balanced" | "assault" | "marksman" | "sentinel";
 
-export type CombatProfile = {
+export type CombatProfile = RangeProfile & {
   accuracyBonus: number;
   damageBonus: number;
   damageReduction: number;
@@ -28,9 +31,26 @@ export type CombatProfile = {
   killHeal: number;
   overwatchAccuracyBonus: number;
   overwatchDamageBonus: number;
+  /** Extra accuracy allies get against a target this unit marked. */
+  markAccuracyBonus: number;
+  /** Extra turns a suppression applied by this unit lasts. */
+  suppressionDurationBonus: number;
+  /** Extra tiles per action point while dashing. */
+  dashTilesBonus: number;
+  /** Extra damage reduction this unit's Guard confers. */
+  guardDamageReduction: number;
+  /** Action points refunded the first time this unit shoots an Exposed target. */
+  flankApRefund: number;
+  /** Extra damage on a shot fired out of a prepared Aim. */
+  aimDamageBonus: number;
+  /** Extra accuracy on any shot against an Exposed target. */
+  exposedAccuracyBonus: number;
+  /** Reaction shots one Overwatch grants beyond the first. */
+  extraOverwatchReactions: number;
 };
 
 export const EMPTY_COMBAT_PROFILE: CombatProfile = {
+  ...EMPTY_RANGE_PROFILE,
   accuracyBonus: 0,
   damageBonus: 0,
   damageReduction: 0,
@@ -45,6 +65,14 @@ export const EMPTY_COMBAT_PROFILE: CombatProfile = {
   killHeal: 0,
   overwatchAccuracyBonus: 0,
   overwatchDamageBonus: 0,
+  markAccuracyBonus: 0,
+  suppressionDurationBonus: 0,
+  dashTilesBonus: 0,
+  guardDamageReduction: 0,
+  flankApRefund: 0,
+  aimDamageBonus: 0,
+  exposedAccuracyBonus: 0,
+  extraOverwatchReactions: 0,
 };
 
 export type Unit = {
@@ -58,6 +86,17 @@ export type Unit = {
   maxAp: number;
   overwatch: boolean;
   peekExposure: { x: number; y: number } | null;
+  /**
+   * Temporary tactical states. Absent means "nothing active", so units from
+   * pre-status saves and hand-built fixtures need no migration.
+   */
+  statuses?: UnitStatuses;
+  /**
+   * What this enemy is currently trying to do. Written only by the AI's
+   * planner and read by the HUD, so the board can never show a prediction the
+   * AI did not actually make.
+   */
+  intent?: EnemyIntent;
   archetypeId?: string;
   displayName?: string;
   aiBehavior?: AiBehavior;
@@ -67,6 +106,12 @@ export type Unit = {
   killsThisTurn?: number;
   encounterShots?: number;
   resolvingOverwatch?: boolean;
+  /** Reaction shots already spent from the current overwatch. */
+  overwatchShotsUsed?: number;
+  /** Relay transfers this unit has made this turn. Caps the AP shuffle. */
+  relaysThisTurn?: number;
+  /** Exposed-target refunds already claimed this turn. */
+  flankRefundsThisTurn?: number;
 };
 
 export type GameMap = {
@@ -158,6 +203,10 @@ export function cloneMap(map: GameMap): GameMap {
     units: map.units.map((u) => ({
       ...u,
       peekExposure: u.peekExposure ? { ...u.peekExposure } : null,
+      // Statuses are gameplay state, so a cloned map must never share them
+      // with its source - the runtime clones the encounter every save.
+      statuses: cloneStatuses(u.statuses),
+      intent: cloneIntent(u.intent),
       combat: u.combat ? { ...u.combat } : undefined,
     })),
   };

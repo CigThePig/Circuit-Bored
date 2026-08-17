@@ -28,7 +28,11 @@ import { paintBoundary } from "../src/generationMotifs.ts";
 import { dominantLandmark, environmentProfile, type MapRect } from "../src/environment.ts";
 import { setTile, type GameMap } from "../src/map.ts";
 import { computeMovementField, movementDestinations } from "../src/movement.ts";
-import { previewShot } from "../src/combat.ts";
+import { applySuppression, previewShot, watchedTiles } from "../src/combat.ts";
+import { performAction } from "../src/actions.ts";
+import { beginUnitTurn } from "../src/rules.ts";
+import { refreshEnemyIntents } from "../src/ai.ts";
+import { intentLabel } from "../src/intent.ts";
 import {
   projectileKindForUnit,
   type RenderState,
@@ -152,6 +156,8 @@ function emptyState(map: GameMap): RenderState {
     coverIndicators: [],
     threatMarkers: [],
     sightLines: [],
+    intentMarkers: [],
+    guardLinks: [],
     shotEffects: [],
     movementEffects: [],
   };
@@ -311,6 +317,274 @@ function overlayScene(): VisualScene {
   };
 }
 
+/**
+ * Every tactical status the combat rules can put on a unit, plus the two
+ * positional cues that belong to a target rather than to a unit.
+ *
+ * The statuses are set through the production rule layer rather than written
+ * onto the units by hand, and the Exposed markers come from `previewShot`, so
+ * this board cannot drift away from what the game actually computes. Nothing
+ * here is a hand-authored overlay pretending to be gameplay truth.
+ */
+function combatStatesScene(): VisualScene {
+  const map = emptyMap(15, 9);
+  for (let x = 0; x < map.width; x++) {
+    setTile(map, x, 0, "wall");
+    setTile(map, x, map.height - 1, "wall");
+  }
+  for (let y = 0; y < map.height; y++) {
+    setTile(map, 0, y, "wall");
+    setTile(map, map.width - 1, y, "wall");
+  }
+
+  // Row 2: the four self-applied states, side by side at the same scale.
+  setTile(map, 2, 1, "half_cover");
+  setTile(map, 5, 1, "half_cover");
+  const aimed = makeArchetypeUnit("operator", "states-aimed", 2, 2);
+  const hunkered = makeArchetypeUnit("bulwark", "states-hunkered", 5, 2);
+  const watching = makeArchetypeUnit("runner", "states-watching", 8, 2);
+  const pinned = makeArchetypeUnit("rifleman", "states-pinned", 11, 2);
+  map.units.push(aimed, hunkered, watching, pinned);
+  performAction(map, aimed, "aim");
+  performAction(map, hunkered, "hunker");
+  performAction(map, watching, "overwatch");
+  applySuppression(pinned);
+  // Start the pinned unit's turn so the board shows what a suppressed unit
+  // actually looks like when it acts: one fewer action point in its pips.
+  beginUnitTurn(pinned);
+
+  // A short spine so the hostile watch below covers only part of the movement
+  // radius. Without it the watcher sees every reachable tile and the review
+  // cannot judge watched ground against unwatched ground.
+  for (let y = 3; y <= 5; y++) setTile(map, 7, y, "wall");
+
+  // Row 6: one hostile flanked by geometry and one caught in a crossfire, so
+  // the Exposed marker can be judged against a target that is merely covered.
+  setTile(map, 5, 5, "half_cover");
+  const flanked = makeArchetypeUnit("marksman", "states-flanked", 5, 6);
+  const crossfired = makeArchetypeUnit("sentinel", "states-crossfire", 10, 6);
+  const shooter = makeArchetypeUnit("operator", "states-shooter", 5, 7);
+  const partner = makeArchetypeUnit("runner", "states-partner", 12, 6);
+  const anchor = makeArchetypeUnit("bulwark", "states-anchor", 8, 6);
+  map.units.push(flanked, crossfired, shooter, partner, anchor);
+  // A hostile also holds a watch, so the watched-lane cue has something real
+  // to sit on inside the selected operator's movement radius.
+  performAction(map, crossfired, "overwatch");
+
+  const state = emptyState(map);
+  state.selected = shooter;
+  const field = computeMovementField(map, shooter);
+  state.moveRange = {
+    originX: shooter.x,
+    originY: shooter.y,
+    tiles: movementDestinations(shooter, field),
+  };
+  state.watchedTiles = watchedTiles(
+    map,
+    crossfired,
+    shooter,
+    state.moveRange.tiles,
+  );
+
+  for (const target of [flanked, crossfired]) {
+    const preview = previewShot(map, shooter, target);
+    if (!preview.shot.canShoot) {
+      throw new Error(`Combat-state target ${target.id} has no production firing line`);
+    }
+    state.highlights.push({
+      x: target.x,
+      y: target.y,
+      fill: "rgba(255, 80, 80, 0.55)",
+      border: "rgba(255, 80, 80, 1)",
+    });
+    state.enemyPreviews.push({
+      x: target.x,
+      y: target.y,
+      hitPct: Math.round(preview.hitChance * 100),
+      hasCover: preview.hadCover,
+      exposed: preview.exposed !== null,
+      damage: preview.damage,
+    });
+    state.sightLines!.push({
+      fromX: preview.shot.from.x,
+      fromY: preview.shot.from.y,
+      toX: preview.targetPoint.x,
+      toY: preview.targetPoint.y,
+      hasCover: preview.hadCover,
+      shooterX: shooter.x,
+      shooterY: shooter.y,
+      mode: preview.shot.mode === "peek" ? "peek" : "direct",
+    });
+  }
+
+  return {
+    id: "combat-states",
+    title: "Tactical state matrix",
+    description:
+      "Aimed, hunkered, overwatching, and suppressed units beside a flanked target, " +
+      "a crossfired target, and the enemy-watched tiles inside a movement radius.",
+    review:
+      "Each status chip should be identifiable at 28 px and in grayscale without reading its colour, " +
+      "the Exposed arrows should read as 'caught between angles' rather than as another badge, " +
+      "watched ground should stay legible as walkable, and no cue may cover a face, weapon, HP, or AP.",
+    state,
+  };
+}
+
+/**
+ * The three operators doing their distinct jobs at once.
+ *
+ * Every state is applied through the production action registry, so the board
+ * shows what Mark, Relay, Dash, Guard, and Brace actually do rather than an
+ * approximation of them. The review question is whether a glance tells you
+ * which operator is which kind of tool.
+ */
+function operatorRolesScene(): VisualScene {
+  const map = emptyMap(16, 9);
+  for (let x = 0; x < map.width; x++) {
+    setTile(map, x, 0, "wall");
+    setTile(map, x, map.height - 1, "wall");
+  }
+  for (let y = 0; y < map.height; y++) {
+    setTile(map, 0, y, "wall");
+    setTile(map, map.width - 1, y, "wall");
+  }
+  setTile(map, 4, 5, "half_cover");
+  setTile(map, 10, 3, "half_cover");
+
+  const rook = makeArchetypeUnit("operator", "roles-rook", 3, 4);
+  // Within Hex's guard reach, which is what makes the tether legal.
+  const vex = makeArchetypeUnit("runner", "roles-vex", 6, 6);
+  const hex = makeArchetypeUnit("bulwark", "roles-hex", 4, 6);
+  const marked = makeArchetypeUnit("rifleman", "roles-marked", 10, 4);
+  const other = makeArchetypeUnit("scrapper", "roles-scrapper", 12, 6);
+  map.units.push(rook, vex, hex, marked, other);
+
+  // Rook coordinates: it calls a target and hands a point to Vex.
+  performAction(map, rook, "mark", marked);
+  performAction(map, rook, "relay", vex);
+  // Vex commits to a sprint; Hex anchors and shields the operator beside it.
+  performAction(map, vex, "dash");
+  performAction(map, hex, "guard", vex);
+  performAction(map, hex, "brace");
+
+  const state = emptyState(map);
+  state.selected = rook;
+  state.guardLinks = [{ fromX: hex.x, fromY: hex.y, toX: vex.x, toY: vex.y }];
+
+  // The mark is a coordination tool, so the scene previews the shot it buys
+  // for a squadmate rather than for Rook.
+  const preview = previewShot(map, vex, marked);
+  if (!preview.shot.canShoot) {
+    throw new Error("Operator-roles scene has no production firing line for the marked target");
+  }
+  state.highlights.push({
+    x: marked.x,
+    y: marked.y,
+    fill: "rgba(255, 80, 80, 0.55)",
+    border: "rgba(255, 80, 80, 1)",
+  });
+  state.enemyPreviews.push({
+    x: marked.x,
+    y: marked.y,
+    hitPct: Math.round(preview.hitChance * 100),
+    hasCover: preview.hadCover,
+    exposed: preview.exposed !== null,
+    damage: preview.damage,
+  });
+
+  return {
+    id: "operator-roles",
+    title: "Operator role matrix",
+    description:
+      "Rook's mark and relay, Vex mid-dash, and Hex braced with a guard link to Vex, " +
+      "all applied through the production action registry.",
+    review:
+      "Each operator should read as a different kind of tool at a glance. The guard tether must " +
+      "connect two units without covering either, the mark chip must be legible on the hostile " +
+      "beside its hit-chance pill, and no role cue may outrank HP or AP.",
+    state,
+  };
+}
+
+/**
+ * Enemy intent: every archetype publishing what it means to do next.
+ *
+ * The banners come from the AI's own planner through `planEnemyIntent`, so the
+ * lab cannot show a plan the game would not. If the planner changes its mind
+ * about these boards, this scene changes with it.
+ */
+function enemyIntentScene(): VisualScene {
+  const map = emptyMap(20, 11);
+  for (let x = 0; x < map.width; x++) {
+    setTile(map, x, 0, "wall");
+    setTile(map, x, map.height - 1, "wall");
+  }
+  for (let y = 0; y < map.height; y++) {
+    setTile(map, 0, y, "wall");
+    setTile(map, map.width - 1, y, "wall");
+  }
+  // A spine with a gap on row 5: it gives the Sentinel a lane worth holding
+  // and the Scrapper ground it has to cross, while leaving the Marksman the
+  // long open line its lock depends on.
+  for (const y of [2, 3, 4, 6, 7, 8]) setTile(map, 9, y, "wall");
+  setTile(map, 5, 8, "half_cover");
+  setTile(map, 15, 2, "half_cover");
+
+  const vex = makeArchetypeUnit("runner", "intent-vex", 3, 5);
+  const rook = makeArchetypeUnit("operator", "intent-rook", 4, 8);
+  const marksman = makeArchetypeUnit("marksman", "intent-marksman", 16, 5);
+  const sentinel = makeArchetypeUnit("sentinel", "intent-sentinel", 11, 2);
+  const scrapper = makeArchetypeUnit("scrapper", "intent-scrapper", 12, 9);
+  const rifleman = makeArchetypeUnit("rifleman", "intent-rifleman", 15, 8);
+  map.units.push(vex, rook, marksman, sentinel, scrapper, rifleman);
+
+  // The Marksman has already settled on a target: that is the telegraph the
+  // player is meant to answer.
+  performAction(map, marksman, "aim");
+
+  refreshEnemyIntents(map);
+  // The lock is the plan this scene exists to review, so the board must
+  // actually be one the planner locks on from. Everything else is whatever the
+  // planner honestly decided.
+  if (marksman.intent?.kind !== "aim") {
+    throw new Error("Enemy-intent scene expected the marksman to hold its lock");
+  }
+
+  const state = emptyState(map);
+  state.selected = vex;
+  for (const enemy of [marksman, sentinel, scrapper, rifleman]) {
+    const label = intentLabel(
+      enemy.intent,
+      map.units.find((u) => u.id === enemy.intent?.targetId)?.displayName ?? null,
+    );
+    if (!label) continue;
+    const focus = map.units.find((u) => u.id === enemy.intent?.targetId);
+    state.intentMarkers!.push({
+      x: enemy.x,
+      y: enemy.y,
+      label,
+      urgent: enemy.intent?.kind === "aim",
+      toX: focus?.x,
+      toY: focus?.y,
+    });
+  }
+
+  return {
+    id: "enemy-intent",
+    title: "Enemy intent overlays",
+    description:
+      "Four hostiles publishing four different plans - a locked-on Marksman, a Scrapper " +
+      "already engaging, and two units manoeuvring - every banner generated by the " +
+      "production AI planner rather than written for the lab.",
+    review:
+      "Intent must be readable without hiding the unit it belongs to. The locked-on Marksman " +
+      "should be the one plan that draws the eye, its thread should be traceable to its target, " +
+      "and four simultaneous banners must not turn the board into a wall of text.",
+    state,
+  };
+}
+
 function effectsScene(): VisualScene {
   const map = emptyMap(15, 13);
   const archetypes: UnitArchetypeId[] = ["runner", "operator", "scrapper", "marksman", "sentinel"];
@@ -427,6 +701,9 @@ export function buildVisualScenes(): VisualScene[] {
     terrainScene(),
     unitScene(),
     overlayScene(),
+    combatStatesScene(),
+    operatorRolesScene(),
+    enemyIntentScene(),
     effectsScene(),
     foundryGalleryScene(),
     dataCoreGalleryScene(),

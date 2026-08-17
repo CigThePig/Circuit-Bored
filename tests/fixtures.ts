@@ -5,6 +5,7 @@ import {
   type TileType,
   type Unit,
 } from "../src/map.ts";
+import { createStatuses, type UnitStatuses } from "../src/status.ts";
 
 const TILE_GLYPHS: Record<string, TileType> = {
   ".": "floor",
@@ -24,7 +25,13 @@ export type UnitInput = {
   ap?: number;
   maxAp?: number;
   overwatch?: boolean;
+  statuses?: Partial<UnitStatuses>;
 };
+
+function buildStatuses(input: UnitInput): UnitStatuses | undefined {
+  if (!input.statuses) return undefined;
+  return { ...createStatuses(), ...input.statuses };
+}
 
 export function buildMap(rows: string[], units: UnitInput[] = []): GameMap {
   const height = rows.length;
@@ -54,6 +61,7 @@ export function buildMap(rows: string[], units: UnitInput[] = []): GameMap {
     maxAp: u.maxAp ?? UNIT_AP,
     overwatch: u.overwatch ?? false,
     peekExposure: null,
+    statuses: buildStatuses(u),
   }));
   return { width, height, tiles, units: realized };
 }
@@ -70,5 +78,6 @@ export function unit(input: UnitInput): Unit {
     maxAp: input.maxAp ?? UNIT_AP,
     overwatch: input.overwatch ?? false,
     peekExposure: null,
+    statuses: buildStatuses(input),
   };
 }

@@ -17,11 +17,16 @@ import {
   writeBaselineRecord,
   type BaseRef,
 } from "./baseline.ts";
-import { captureCases, launchChromium } from "./capture.ts";
+import { captureCases, launchChromium, readSceneIds } from "./capture.ts";
 import { compareCaptures, rankByChange, writeComparisonIndex } from "./compare.ts";
 import { artifactLayout, ensureDir, relativePosix, removeDir, repositoryRoot } from "./paths.ts";
 import { writeReport } from "./report.ts";
-import { buildSampleCases, VISUAL_REVIEW_CASES, type ReviewCase } from "./review-matrix.ts";
+import {
+  buildSampleCases,
+  partitionByKnownScenes,
+  VISUAL_REVIEW_CASES,
+  type ReviewCase,
+} from "./review-matrix.ts";
 import { startVisualServer } from "./server.ts";
 
 export type Command = "review" | "capture" | "baseline" | "compare" | "sample";
@@ -189,22 +194,41 @@ export async function run(options: CliOptions, log: (message: string) => void): 
       const reusable = !options.refreshBaseline
         && cached?.sha === base.sha
         && hasFiles(layout.baseline)
-        && cases.every((entry) => cached.caseIds.includes(entry.id));
+        && cases.every((entry) =>
+          cached.caseIds.includes(entry.id) || (cached.newSceneIds ?? []).includes(entry.sceneId)
+        );
       if (reusable) {
         base.captured = true;
         baselineNote = `Baseline reused from a previous run at ${base.shortSha} (${base.resolvedFrom}). Use --refresh-baseline to re-render it.`;
         verbose(`baseline: reusing cached captures at ${base.shortSha}`);
       } else {
-        verbose(`baseline: rendering ${cases.length} cases at ${base.shortSha} (${base.resolvedFrom}) in a temporary worktree`);
         if (fullRun) removeDir(layout.baseline);
         ensureDir(layout.baseline);
+        let baselineCases = cases;
+        let newScenes: string[] = [];
         await withBaselineWorktree(repoRoot, base.sha, async (worktreeDir) => {
           const server = await startVisualServer(worktreeDir);
           try {
+            // A scene added on this branch does not exist at the base commit,
+            // and asking that older lab to render it is a hard error. Ask it
+            // what it knows first and leave the rest without a baseline, which
+            // is the honest answer for a brand-new scene anyway.
+            const partition = partitionByKnownScenes(
+              cases,
+              await readSceneIds(browser!, server.origin),
+            );
+            baselineCases = partition.renderable;
+            newScenes = partition.newSceneIds;
+            if (newScenes.length > 0) {
+              verbose(
+                `baseline: ${newScenes.length} scene(s) are new on this branch and have no baseline: ${newScenes.join(", ")}`,
+              );
+            }
+            verbose(`baseline: rendering ${baselineCases.length} cases at ${base!.shortSha} (${base!.resolvedFrom}) in a temporary worktree`);
             await captureCases(browser!, {
               origin: server.origin,
               outDir: layout.baseline,
-              cases,
+              cases: baselineCases,
               label: "baseline",
               onProgress: verbose,
             });
@@ -218,9 +242,13 @@ export async function run(options: CliOptions, log: (message: string) => void): 
           resolvedFrom: base.resolvedFrom,
           subject: base.subject,
           generatedAt: new Date().toISOString(),
-          caseIds: cases.map((entry) => entry.id),
+          caseIds: baselineCases.map((entry) => entry.id),
+          newSceneIds: newScenes,
         });
         baselineNote = `Baseline rendered from ${base.resolvedFrom} @ ${base.shortSha} ("${base.subject}") in a detached worktree. Your working tree was not modified.`;
+        if (newScenes.length > 0) {
+          baselineNote += ` ${newScenes.length} scene(s) are new on this branch and have no before-image: ${newScenes.join(", ")}.`;
+        }
       }
     }
 

@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_SCORE_EXPOSES_TARGET,
   AI_SCORE_PEEK_EXPOSURE_RISK,
   beginEnemyTurn,
   takeEnemyAction,
   type AiAction,
 } from "../src/ai.ts";
+import { performAction } from "../src/actions.ts";
+import {
+  applySuppression,
+  canShootTarget,
+  exposedAgainst,
+  previewShot,
+} from "../src/combat.ts";
+import { beginUnitTurn } from "../src/rules.ts";
+import { isHunkered } from "../src/status.ts";
 import { createAiSession } from "../src/aiSession.ts";
 import { buildMap } from "./fixtures.ts";
 
@@ -328,6 +338,168 @@ describe("AI movement", () => {
     const session = createAiSession();
     beginEnemyTurn(map, enemy, session);
     expect(takeEnemyAction(map, enemy, session)).toEqual({ kind: "overwatch" });
-    expect(enemy).toMatchObject({ overwatch: true, ap: 0 });
+    // Overwatch is a fixed 2 AP commitment now; the rest of the turn survives
+    // it rather than being erased.
+    expect(enemy).toMatchObject({ overwatch: true, ap: 2 });
+  });
+});
+
+describe("AI awareness of the new tactical rules", () => {
+  it("fires on the operator whose cover it has already gone around", () => {
+    // Both operators are visible and both stand against cover. Only the
+    // western one's cover fails to face the shooter, and that is the one worth
+    // shooting.
+    const map = buildMap([
+      "..........",
+      "..h.......",
+      "......h...",
+    ], [
+      { team: "player", x: 2, y: 2 },
+      { team: "player", x: 7, y: 2 },
+      { team: "enemy", x: 0, y: 2 },
+    ]);
+    const [flanked, covered, enemy] = map.units;
+    expect(exposedAgainst(map, enemy, flanked)).toBe("flanked");
+    expect(exposedAgainst(map, enemy, covered)).toBeNull();
+    expect(AI_SCORE_EXPOSES_TARGET).toBeGreaterThan(0);
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+    expect(action.kind).toBe("shoot");
+    if (action.kind === "shoot") {
+      expect(action.target.id).toBe(flanked.id);
+      expect(action.result.exposed).toBe("flanked");
+    }
+  });
+
+  it("reads a hunkered target's real defence rather than raw cover", () => {
+    const map = buildMap([
+      ".ph...e",
+    ], [
+      { team: "player", x: 1, y: 0 },
+      { team: "enemy", x: 6, y: 0 },
+    ]);
+    const [player, enemy] = map.units;
+    const open = previewShot(map, enemy, player).hitChance;
+    performAction(map, player, "hunker", null, () => 0);
+    const dug = previewShot(map, enemy, player).hitChance;
+    expect(dug).toBeLessThan(open);
+  });
+
+  it("shoots the softer of two targets when one has dug in", () => {
+    const map = buildMap([
+      "..h....",
+      ".......",
+      "e......",
+    ], [
+      { team: "player", x: 3, y: 0 },
+      { team: "player", x: 3, y: 2 },
+      { team: "enemy", x: 0, y: 2 },
+    ]);
+    const [dug, exposed, enemy] = map.units;
+    performAction(map, dug, "hunker", null, () => 0);
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+    expect(action.kind).toBe("shoot");
+    if (action.kind === "shoot") expect(action.target.id).toBe(exposed.id);
+  });
+
+  it("fights at a penalty while suppressed instead of ignoring it", () => {
+    const map = buildMap([
+      "e....p",
+    ], [
+      { team: "enemy", x: 0, y: 0 },
+      { team: "player", x: 5, y: 0 },
+    ]);
+    const [enemy, player] = map.units;
+    const clean = previewShot(map, enemy, player).hitChance;
+    applySuppression(enemy);
+    beginUnitTurn(enemy);
+    expect(enemy.ap).toBe(enemy.maxAp - 1);
+    expect(previewShot(map, enemy, player).hitChance).toBeLessThan(clean);
+  });
+
+  it("refuses to establish overwatch while suppressed", () => {
+    const map = buildMap([
+      "#####",
+      "#.#.#",
+      "#####",
+    ], [
+      { team: "enemy", x: 1, y: 1 },
+      { team: "player", x: 3, y: 1 },
+    ]);
+    const enemy = map.units[0];
+    enemy.aiBehavior = "sentinel";
+    applySuppression(enemy);
+    beginUnitTurn(enemy);
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session);
+    expect(action.kind).not.toBe("overwatch");
+    expect(enemy.overwatch).toBe(false);
+  });
+
+  it("does not wander off a lane it just committed to watching", () => {
+    const map = buildMap([
+      "#####",
+      "#.#.#",
+      "#####",
+    ], [
+      { team: "enemy", x: 1, y: 1 },
+      { team: "player", x: 3, y: 1 },
+    ]);
+    const enemy = map.units[0];
+    enemy.aiBehavior = "sentinel";
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    expect(takeEnemyAction(map, enemy, session).kind).toBe("overwatch");
+    expect(takeEnemyAction(map, enemy, session)).toEqual({ kind: "wait" });
+    expect(enemy).toMatchObject({ x: 1, y: 1, overwatch: true });
+  });
+
+  it("prefers an approach that keeps out of a watched lane", () => {
+    // Two ways north. The eastern corridor is covered by the operator holding
+    // overwatch at (6,0); the western one is not.
+    const map = buildMap([
+      "......p",
+      ".#####.",
+      ".......",
+      ".....e.",
+    ], [
+      { team: "player", x: 6, y: 0, overwatch: true },
+      { team: "enemy", x: 5, y: 3 },
+    ]);
+    const [watcher, enemy] = map.units;
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+    if (action.kind === "move") {
+      // Whatever it chose, it must not have walked straight into the watch
+      // when a route outside it existed.
+      expect(canShootTarget(map, watcher, enemy).canShoot).toBe(false);
+    }
+  });
+
+  it("hunkers a pinned defender that has cover and nowhere better to go", () => {
+    // The marksman is already on the only tile whose cover faces the operator,
+    // it is being looked at, and it cannot afford a shot. Digging in is the
+    // one useful thing left.
+    const map = buildMap([
+      "########",
+      "#eh....#",
+      "########",
+    ], [
+      { team: "enemy", x: 1, y: 1 },
+      { team: "player", x: 6, y: 1 },
+    ]);
+    const enemy = map.units[0];
+    enemy.aiBehavior = "marksman";
+    enemy.ap = 1;
+    const session = createAiSession();
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+    expect(action.kind).toBe("hunker");
+    expect(isHunkered(enemy)).toBe(true);
   });
 });

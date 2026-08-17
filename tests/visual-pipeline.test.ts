@@ -21,6 +21,7 @@ import {
   buildSampleCases,
   captureRequests,
   generatedSceneId,
+  partitionByKnownScenes,
   requiredSceneIds,
   sampleSeed,
   stripFileName,
@@ -272,6 +273,55 @@ describe("review matrix", () => {
     expect(first[0].inspection!.seed).toBe(sampleSeed("industrial", "landmark", 0));
     // Sampling must not silently render hundreds of boards.
     expect(buildSampleCases(1000)).toHaveLength(24 * 6);
+  });
+});
+
+describe("baseline scene availability", () => {
+  it("sets aside cases whose scene the base commit never had", () => {
+    // The failure this guards: a branch that adds a lab scene asked the base
+    // commit to render it, the older lab threw "unknown scene", and the whole
+    // review run died - on a workflow whose stated purpose is never to block
+    // a merge on a visual judgement.
+    const known = requiredSceneIds(VISUAL_REVIEW_CASES).slice(0, 2);
+    const { renderable, newSceneIds } = partitionByKnownScenes(VISUAL_REVIEW_CASES, known);
+    expect(renderable.length).toBeGreaterThan(0);
+    expect(newSceneIds.length).toBeGreaterThan(0);
+    for (const entry of renderable) expect(known).toContain(entry.sceneId);
+    // Every case is either rendered or accounted for by a reported new scene.
+    for (const entry of VISUAL_REVIEW_CASES) {
+      const covered = renderable.includes(entry) || newSceneIds.includes(entry.sceneId);
+      expect(covered, entry.id).toBe(true);
+    }
+    // Scenes are reported once each, not once per case.
+    expect(new Set(newSceneIds).size).toBe(newSceneIds.length);
+  });
+
+  it("renders everything when the base commit knows every scene", () => {
+    const known = [...requiredSceneIds(VISUAL_REVIEW_CASES), SEED_SCENE_ID];
+    const { renderable, newSceneIds } = partitionByKnownScenes(VISUAL_REVIEW_CASES, known);
+    expect(renderable).toHaveLength(VISUAL_REVIEW_CASES.length);
+    expect(newSceneIds).toEqual([]);
+  });
+
+  it("reports every scene as new when the base commit knows none", () => {
+    const { renderable, newSceneIds } = partitionByKnownScenes(VISUAL_REVIEW_CASES, []);
+    expect(renderable).toEqual([]);
+    expect(newSceneIds).toEqual(requiredSceneIds(VISUAL_REVIEW_CASES));
+  });
+
+  it("keeps the capture bridge publishing a scene list for this check to read", () => {
+    // partitionByKnownScenes is only usable because the lab publishes its
+    // scene ids on the bridge before it tries to honour a request. If that
+    // field ever goes away, the baseline filter silently sees an empty list.
+    const bridgeSource = readFileSync(
+      path.join(repositoryRoot(), "tools", "visual-lab.ts"),
+      "utf8",
+    );
+    expect(bridgeSource).toContain("sceneIds:");
+    const install = bridgeSource.indexOf("window.__CIRCUIT_BORED_VISUAL__ = bridge");
+    const firstApply = bridgeSource.indexOf("applyCapture(search)", install);
+    expect(install).toBeGreaterThan(0);
+    expect(firstApply).toBeGreaterThan(install);
   });
 });
 
