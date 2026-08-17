@@ -170,10 +170,12 @@
            remains below this viewport instead of being pushed past the board's
            selected unit when a layout puts the squad near the bottom edge.
            The reserve covers the top bar plus the tallest the HUD gets: two
-           status lines, the combat action tray, a wrapped hint line, and the
-           End Turn row. End Turn must stay on screen without scrolling. */
-        height: min(600px, max(240px, calc(100vh - 248px)));
-        height: min(600px, max(240px, calc(100dvh - 248px)));
+           status lines, the action tray wrapped to two rows for an operator
+           with role abilities, a wrapped hint line, and the End Turn row. End
+           Turn must stay on screen without scrolling, so this number is
+           measured against the real panel rather than estimated. */
+        height: min(600px, max(240px, calc(100vh - 300px)));
+        height: min(600px, max(240px, calc(100dvh - 300px)));
         isolation: isolate;
         overflow: auto;
         overscroll-behavior: contain;
@@ -332,6 +334,15 @@
       }
       .action-tray .action-button:disabled .action-cost {
         color: var(--text-disabled);
+      }
+      /* Intel costs nothing and changes what a tap means rather than spending
+         a turn, so it reads as a mode switch instead of another action. */
+      .action-tray .intel-button {
+        flex: 0 1 62px;
+        border-style: dashed;
+      }
+      .action-tray .intel-button .action-cost {
+        font-style: italic;
       }
       /* Collapses to nothing when empty so the panel never reserves dead
          space above the End Turn button. */

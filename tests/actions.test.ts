@@ -20,7 +20,7 @@ import {
   SUPPRESSED_ACCURACY_PENALTY,
 } from "../src/combat.ts";
 import { beginUnitTurn, endUnitTurn, onUnitMoved } from "../src/rules.ts";
-import { isAimed, isHunkered, isSuppressed } from "../src/status.ts";
+import { createStatuses, isAimed, isHunkered, isSuppressed } from "../src/status.ts";
 import { buildMap } from "./fixtures.ts";
 
 const always = () => 0;
@@ -112,7 +112,7 @@ describe("action eligibility", () => {
 
   it("refuses to aim, suppress, or watch while suppressed", () => {
     const { map, player, enemy } = duel(["......"], 0, 0, 5, 0);
-    player.statuses = { aimed: false, hunkered: false, suppressed: 1 };
+    player.statuses = { ...createStatuses(), suppressed: 1 };
     expect(actionEligibility(map, player, "aim").ok).toBe(false);
     expect(actionEligibility(map, player, "suppress", enemy).ok).toBe(false);
     expect(actionEligibility(map, player, "overwatch").ok).toBe(false);
@@ -134,7 +134,10 @@ describe("action eligibility", () => {
     const { map, player } = duel(["......"], 0, 0, 5, 0);
     player.ap = 1;
     const tray = availableActions(map, player);
-    expect(tray.map((entry) => entry.action.id)).toEqual([...ACTION_TRAY_ORDER]);
+    // A unit with no archetype gets the shared toolkit and none of the role
+    // abilities, which is what keeps an operator's tray about its own job.
+    expect(tray.map((entry) => entry.action.id))
+      .toEqual(ACTION_TRAY_ORDER.filter((id) => !getAction(id).archetypes));
     for (const entry of tray) {
       expect(entry.action.apCost).toBeGreaterThan(0);
       expect(entry.preview.detail.length).toBeGreaterThan(0);

@@ -22,23 +22,24 @@ import {
   type ShotEffect,
 } from "./render.ts";
 import {
-  overwatchShouldFire,
   previewShot,
   resolveShot,
+  settleOverwatch,
   watchedTiles,
   type ShotPreview,
   type ShotResult,
 } from "./combat.ts";
 import {
-  ACTION_TRAY_ORDER,
   actionEligibility,
+  actionsForUnit,
   availableActions,
   getAction,
+  isCandidateSide,
   performAction,
   SHOOT_AP_COST,
   type ActionId,
 } from "./actions.ts";
-import { beginEnemyTurn, takeEnemyAction } from "./ai.ts";
+import { beginEnemyTurn, refreshEnemyIntents, takeEnemyAction } from "./ai.ts";
 import { createAiSession } from "./aiSession.ts";
 import { logReport, validateMap } from "./validation.ts";
 import {
@@ -51,6 +52,10 @@ import {
   statusLabels,
 } from "./rules.ts";
 import { isSuppressed } from "./status.ts";
+import { activeGuardian } from "./combat.ts";
+import { intentCounterHint, intentLabel } from "./intent.ts";
+import { rangeBandLabel, rangeRating } from "./range.ts";
+import { UNIT_ARCHETYPES, type UnitArchetypeId } from "./content.ts";
 
 /** Animation length of a move that covers a single tile. */
 const SINGLE_STEP_MS = 280;
@@ -166,10 +171,25 @@ export function startRuntime(
    */
   let pendingAction: ActionId | null = null;
 
+  /**
+   * While on, tapping a hostile reads its dossier instead of shooting it.
+   * Inspection needs its own mode because the enemies worth understanding are
+   * exactly the ones the player can also shoot, so sharing the tap would make
+   * the interesting cases unreadable.
+   */
+  let intelMode = false;
+  /** The hostile whose dossier is currently open, if any. */
+  let inspected: Unit | null = null;
+
   const actionRow = document.createElement("div");
   actionRow.className = "row action-tray";
+  // The tray is rebuilt per selected operator: each one shows its own role
+  // abilities plus the shared toolkit, rather than a fixed grid where most
+  // buttons are permanently greyed out for most units.
   const actionButtons = new Map<ActionId, HTMLButtonElement>();
-  for (const id of ACTION_TRAY_ORDER) {
+  let trayUnitKey = "";
+
+  const makeActionButton = (id: ActionId): HTMLButtonElement => {
     const action = getAction(id);
     const button = document.createElement("button");
     button.className = "action-button";
@@ -180,9 +200,35 @@ export function startRuntime(
     button.querySelector(".action-name")!.textContent = action.shortLabel;
     button.querySelector(".action-cost")!.textContent = `${action.apCost} AP`;
     button.addEventListener("click", () => onActionButton(id));
-    actionButtons.set(id, button);
-    actionRow.appendChild(button);
-  }
+    return button;
+  };
+
+  const intelBtn = document.createElement("button");
+  intelBtn.className = "action-button intel-button";
+  intelBtn.innerHTML =
+    `<span class="action-name">Intel</span><span class="action-cost">free</span>`;
+  intelBtn.title =
+    "Intel — free\nTarget: a hostile.\nRead its role, its weakness, and what it is planning.";
+  intelBtn.addEventListener("click", () => {
+    intelMode = !intelMode;
+    if (intelMode) pendingAction = null;
+    else inspected = null;
+    redraw();
+  });
+
+  const rebuildTray = (unit: Unit | null) => {
+    const key = unit ? `${unit.id}:${unit.archetypeId ?? ""}` : "";
+    if (key === trayUnitKey) return;
+    trayUnitKey = key;
+    actionButtons.clear();
+    actionRow.innerHTML = "";
+    for (const id of unit ? actionsForUnit(unit) : []) {
+      const button = makeActionButton(id);
+      actionButtons.set(id, button);
+      actionRow.appendChild(button);
+    }
+    actionRow.appendChild(intelBtn);
+  };
 
   const endTurnBtn = document.createElement("button");
   endTurnBtn.textContent = "End Turn";
@@ -217,11 +263,53 @@ export function startRuntime(
     return v;
   };
 
+  /** Display name for a unit id, for intent banners and dossier text. */
+  const nameOf = (id: string | null): string | null => {
+    if (!id) return null;
+    const unit = map.units.find((u) => u.id === id);
+    return unit?.displayName ?? null;
+  };
+
   const computeOverlays = () => {
     state.coverIndicators = [];
     state.threatMarkers = [];
     state.sightLines = [];
+    state.intentMarkers = [];
+    state.guardLinks = [];
     if (turn !== "player" || busy) return;
+
+    // Published enemy plans. Read straight off the units, where the AI's
+    // planner wrote them; the renderer never predicts anything itself.
+    for (const e of map.units) {
+      if (e.team !== "enemy" || e.hp <= 0 || !e.intent) continue;
+      const label = intentLabel(e.intent, nameOf(e.intent.targetId));
+      if (!label) continue;
+      const focus = e.intent.targetId
+        ? map.units.find((u) => u.id === e.intent!.targetId && u.hp > 0)
+        : undefined;
+      state.intentMarkers!.push({
+        x: e.x,
+        y: e.y,
+        label,
+        urgent: e.intent.kind === "aim",
+        toX: focus?.x,
+        toY: focus?.y,
+      });
+    }
+
+    // Guard tethers, resolved through the same rule the damage step uses, so a
+    // drawn link always means real protection.
+    for (const u of map.units) {
+      if (u.hp <= 0) continue;
+      const guardian = activeGuardian(map, u);
+      if (!guardian) continue;
+      state.guardLinks!.push({
+        fromX: guardian.x,
+        fromY: guardian.y,
+        toX: u.x,
+        toY: u.y,
+      });
+    }
 
     for (const e of map.units) {
       if (e.team !== "enemy" || e.hp <= 0) continue;
@@ -316,18 +404,33 @@ export function startRuntime(
     }
     // While a targeted action is armed the board previews that action's
     // targets, not the shot's: the same enemies would otherwise be highlighted
-    // with a hit chance the player is not about to roll.
+    // with a hit chance the player is not about to roll. An ally-targeted
+    // ability highlights squadmates instead, on the same rules.
     const previewAction: ActionId = pendingAction ?? "shoot";
+    const armedAlly = pendingAction !== null &&
+      getAction(pendingAction).targeting === "ally";
     for (const u of map.units) {
-      if (u.team !== "enemy" || u.hp <= 0) continue;
+      if (u.hp <= 0) continue;
+      if (!isCandidateSide(selected, u, previewAction)) continue;
       if (!actionEligibility(map, selected, previewAction, u).ok) continue;
-      const preview = cachedPreview(selected, u);
       state.highlights.push({
         x: u.x,
         y: u.y,
-        fill: pendingAction ? "rgba(255, 154, 77, 0.5)" : "rgba(255, 80, 80, 0.55)",
-        border: pendingAction ? "rgba(255, 154, 77, 1)" : "rgba(255, 80, 80, 1)",
+        fill: armedAlly
+          ? "rgba(143, 208, 255, 0.42)"
+          : pendingAction
+            ? "rgba(255, 154, 77, 0.5)"
+            : "rgba(255, 80, 80, 0.55)",
+        border: armedAlly
+          ? "rgba(143, 208, 255, 1)"
+          : pendingAction
+            ? "rgba(255, 154, 77, 1)"
+            : "rgba(255, 80, 80, 1)",
       });
+      // Only a shot has a hit chance worth previewing; a support ability does
+      // not, and showing one would be a number the player cannot act on.
+      if (armedAlly) continue;
+      const preview = cachedPreview(selected, u);
       state.enemyPreviews.push({
         x: u.x,
         y: u.y,
@@ -372,9 +475,48 @@ export function startRuntime(
    * type, and effect text all come from the action definitions, so a button
    * can never advertise something the rules would refuse.
    */
+  /**
+   * The dossier for an inspected hostile: what it is for, what beats it, and
+   * what it is currently planning. This is the "look at an enemy and know the
+   * shape of the plan that beats it" surface.
+   */
+  const dossierText = (enemy: Unit): string => {
+    const archetype = enemy.archetypeId
+      ? UNIT_ARCHETYPES[enemy.archetypeId as UnitArchetypeId]
+      : undefined;
+    const lines: string[] = [];
+    lines.push(`${enemy.displayName ?? "Hostile"} · HP ${enemy.hp}/${enemy.maxHp}`);
+    if (archetype) {
+      lines.push(archetype.role);
+      lines.push(`Weakness: ${archetype.counter}`);
+      const bands = (["close", "medium", "long"] as const)
+        .map((band) => `${rangeBandLabel(band)} ${rangeRating(enemy.combat, band)}`)
+        .join(" · ");
+      lines.push(bands);
+    }
+    const plan = intentLabel(enemy.intent, nameOf(enemy.intent?.targetId ?? null));
+    if (plan) {
+      lines.push(`Plan: ${plan}`);
+      const counter = intentCounterHint(enemy.intent);
+      if (counter) lines.push(counter);
+    }
+    const states = statusLabels(enemy);
+    if (states.length > 0) lines.push(`[${states.join(" ")}]`);
+    return lines.join("  ·  ");
+  };
+
   const updateActionTray = () => {
     const canAct = turn === "player" && outcome === null && !busy &&
       selected !== null && selected.team === "player" && selected.hp > 0;
+    rebuildTray(canAct ? selected : null);
+    intelBtn.disabled = turn !== "player" || outcome !== null || busy;
+    intelBtn.classList.toggle("active", intelMode);
+
+    if (intelMode && inspected && inspected.hp > 0) {
+      hintLabel.textContent = dossierText(inspected);
+      for (const button of actionButtons.values()) button.disabled = true;
+      return;
+    }
     if (!canAct || !selected) {
       for (const [id, button] of actionButtons) {
         const action = getAction(id);
@@ -383,7 +525,9 @@ export function startRuntime(
         button.title = `${action.name} — ${action.apCost} AP. ${action.description}`;
       }
       hintLabel.textContent = turn === "player" && outcome === null && !busy
-        ? "Select an operator to see its actions."
+        ? intelMode
+          ? "Intel: tap a hostile to read its role, weakness, and plan."
+          : "Select an operator to see its actions."
         : "";
       return;
     }
@@ -392,11 +536,13 @@ export function startRuntime(
       const button = actionButtons.get(entry.action.id);
       if (!button) continue;
       const armed = pendingAction === entry.action.id;
-      button.disabled = !entry.eligibility.ok && !armed;
+      button.disabled = intelMode || (!entry.eligibility.ok && !armed);
       button.classList.toggle("active", armed);
       const targetText = entry.action.targeting === "enemy"
         ? "Target: a hostile you can shoot."
-        : "Target: this operator.";
+        : entry.action.targeting === "ally"
+          ? "Target: a squadmate."
+          : "Target: this operator.";
       const availability = entry.eligibility.ok
         ? "Available."
         : `Unavailable: ${entry.eligibility.reason}`;
@@ -404,10 +550,15 @@ export function startRuntime(
         `${entry.action.name} — ${entry.action.apCost} AP\n${targetText}\n` +
         `${entry.action.description}\n${availability}`;
     }
+    if (intelMode) {
+      hintLabel.textContent = "Intel: tap a hostile to read its role, weakness, and plan.";
+      return;
+    }
     if (pendingAction) {
       const action = getAction(pendingAction);
+      const who = action.targeting === "ally" ? "squadmate" : "hostile";
       hintLabel.textContent =
-        `${action.name} armed (${action.apCost} AP). Tap a highlighted hostile, or tap ${action.shortLabel} again to cancel.`;
+        `${action.name} armed (${action.apCost} AP). Tap a highlighted ${who}, or tap ${action.shortLabel} again to cancel.`;
       return;
     }
     if (isSuppressed(unit)) {
@@ -415,9 +566,35 @@ export function startRuntime(
         "Suppressed: reduced accuracy and one fewer action point. Cannot aim, suppress, or set overwatch.";
       return;
     }
+    // While a shot is on the table, say which band it is at and how this
+    // operator's weapon feels about that. Range only matters if the player can
+    // see it, and this is the moment it matters.
+    const shotNote = bestShotNote(unit);
     hintLabel.textContent = unit.ap >= SHOOT_AP_COST
-      ? `Tap a hostile to shoot (${SHOOT_AP_COST} AP), tap ground to move, or choose an action.`
-      : "Not enough AP to shoot. Tap ground to move, or choose an action.";
+      ? `Tap a hostile to shoot (${SHOOT_AP_COST} AP), tap ground to move, or choose an action.${shotNote}`
+      : `Not enough AP to shoot. Tap ground to move, or choose an action.${shotNote}`;
+  };
+
+  /** Range commentary for the best shot the selected operator currently has. */
+  const bestShotNote = (unit: Unit): string => {
+    let best: { preview: ShotPreview; target: Unit } | null = null;
+    for (const e of map.units) {
+      if (e.team !== "enemy" || e.hp <= 0) continue;
+      const preview = cachedPreview(unit, e);
+      if (!preview.shot.canShoot) continue;
+      if (!best || preview.hitChance > best.preview.hitChance) {
+        best = { preview, target: e };
+      }
+    }
+    if (!best) return "";
+    const rating = rangeRating(unit.combat, best.preview.band);
+    const verdict = rating === "strong"
+      ? "your range"
+      : rating === "weak"
+        ? "outside your range"
+        : "workable";
+    return `  Best line: ${best.target.displayName ?? "hostile"} at ` +
+      `${rangeBandLabel(best.preview.band)} — ${verdict}.`;
   };
 
   const onActionButton = (id: ActionId) => {
@@ -443,6 +620,7 @@ export function startRuntime(
       return;
     }
     addFloating(action.shortLabel.toUpperCase(), selected.x, selected.y, actionFloatColor(id));
+    refreshEnemyIntents(map);
     if (isSpent(selected)) selected = null;
     notifyState();
     redraw();
@@ -584,7 +762,45 @@ export function startRuntime(
     if (turn !== "player" || outcome !== null || busy) return;
     const tappedUnit = unitAt(map, x, y);
 
-    if (tappedUnit && tappedUnit.team === "player") {
+    // Intel is a read-only mode, so it answers every tap before anything can
+    // spend an action point.
+    if (intelMode) {
+      if (tappedUnit && tappedUnit.team === "enemy" && tappedUnit.hp > 0) {
+        inspected = tappedUnit;
+      } else {
+        inspected = null;
+      }
+      redraw();
+      return;
+    }
+
+    if (tappedUnit && tappedUnit.team === "player" && tappedUnit.hp > 0) {
+      // An armed ally ability claims the tap; otherwise tapping a squadmate
+      // selects it, which is the behaviour the player already knows.
+      if (
+        selected &&
+        pendingAction &&
+        getAction(pendingAction).targeting === "ally" &&
+        tappedUnit.id !== selected.id
+      ) {
+        const actor = selected;
+        const actionId = pendingAction;
+        pendingAction = null;
+        const support = performAction(map, actor, actionId, tappedUnit, random);
+        if (support.ok) {
+          addFloating(
+            getAction(actionId).shortLabel.toUpperCase(),
+            tappedUnit.x,
+            tappedUnit.y,
+            actionFloatColor(actionId),
+          );
+          if (isSpent(actor)) selected = null;
+          refreshEnemyIntents(map);
+          notifyState();
+        }
+        redraw();
+        return;
+      }
       selected = tappedUnit;
       pendingAction = null;
       redraw();
@@ -634,7 +850,12 @@ export function startRuntime(
         const effect = addSuppressionEffect(shooter, tappedUnit, result.shot);
         durationMs = effect?.durationMs ?? 0;
         addFloating("SUPPRESSED", tappedUnit.x, tappedUnit.y, "#ff9a4d");
+      } else if (result.kind === "mark") {
+        addFloating("MARKED", tappedUnit.x, tappedUnit.y, "#ffe066");
       }
+      // The board just changed in ways that can invalidate an enemy's plan -
+      // a broken aim, a dead target, a cleared watch - so republish.
+      refreshEnemyIntents(map);
       if (isSpent(shooter)) selected = null;
       busy = true;
       redraw();
@@ -705,6 +926,7 @@ export function startRuntime(
       if (cancelled) return;
       // Each completed tile is its own persistence boundary, so quitting
       // mid-walk saves the encounter exactly where the unit stands.
+      refreshEnemyIntents(map);
       notifyState();
       if (mover.hp <= 0) return;
     }
@@ -717,7 +939,16 @@ export function startRuntime(
   ) => {
     for (const p of map.units) {
       if (p.team !== "player" || p.hp <= 0) continue;
-      if (!overwatchShouldFire(map, p, enemy, from, to)) continue;
+      // settleOverwatch spends the reaction and any evasion charge, so the
+      // watch's remaining shots and a dashing mover's slip are accounted for
+      // exactly once, here, rather than by each caller remembering to.
+      const check = settleOverwatch(map, p, enemy, from, to);
+      if (check.evaded) {
+        addFloating("SLIPPED", enemy.x, enemy.y, "#7ff0c4");
+        redraw();
+        continue;
+      }
+      if (!check.fires) continue;
       p.resolvingOverwatch = true;
       const result = resolveShot(map, p, enemy, random);
       const effect = addShotEffect(p, enemy, result);
@@ -728,7 +959,6 @@ export function startRuntime(
       } else {
         addFloating("MISS", enemy.x, enemy.y, "#fff");
       }
-      p.overwatch = false;
       redraw();
       checkOutcome();
       // The caller persists only after this reaction completes. If the player
@@ -747,13 +977,19 @@ export function startRuntime(
   ): Promise<void> {
     for (const enemy of map.units) {
       if (enemy.team !== "enemy" || enemy.hp <= 0) continue;
-      if (!overwatchShouldFire(map, enemy, player, from, to)) continue;
+      const check = settleOverwatch(map, enemy, player, from, to);
+      if (check.evaded) {
+        // Vex's sprint carried it through. The watch survives for the next one.
+        addFloating("SLIPPED", player.x, player.y, "#7ff0c4");
+        redraw();
+        continue;
+      }
+      if (!check.fires) continue;
       enemy.resolvingOverwatch = true;
       const result = resolveShot(map, enemy, player, random);
       const effect = addShotEffect(enemy, player, result);
       enemy.resolvingOverwatch = false;
       if (!effect) continue;
-      enemy.overwatch = false;
       addFloating(result.hit ? `HIT ${result.damage}` : "MISS", player.x, player.y, result.hit ? "#ffd83a" : "#fff");
       redraw();
       checkOutcome();
@@ -813,6 +1049,26 @@ export function startRuntime(
           redraw();
           notifyState();
           continue;
+        } else if (action.kind === "aim") {
+          // The telegraph. The player gets this turn to break it.
+          addFloating("LOCKING ON", enemy.x, enemy.y, "#ff5f6d");
+          redraw();
+          notifyState();
+          continue;
+        } else if (action.kind === "suppress") {
+          const effect = addSuppressionEffect(
+            enemy,
+            action.target,
+            previewShot(map, enemy, action.target),
+          );
+          addFloating("SUPPRESSED", action.target.x, action.target.y, "#ff9a4d");
+          redraw();
+          notifyState();
+          if (effect) {
+            await delay(effect.durationMs);
+            if (cancelled) return;
+          }
+          continue;
         }
       }
       if (outcome !== null) break;
@@ -826,6 +1082,9 @@ export function startRuntime(
       for (const u of map.units) {
         if (u.team === "player" && u.hp > 0) beginUnitTurn(u);
       }
+      // Publish what every surviving hostile means to do next, so the player
+      // plans against the enemy's plan rather than against last turn's damage.
+      refreshEnemyIntents(map);
       showTurnBanner("player");
     }
     busy = false;
@@ -847,6 +1106,7 @@ export function startRuntime(
     }
     selected = null;
     pendingAction = null;
+    inspected = null;
     showTurnBanner("enemy");
     redraw();
     notifyState();
@@ -898,6 +1158,7 @@ export function startRuntime(
 
   const initialPlayer = map.units.find((u) => u.team === "player" && u.hp > 0) ?? null;
   selected = initialPlayer;
+  if (turn === "player") refreshEnemyIntents(map);
   // A saved encounter can contain the killing blow before its completion
   // overlay was acknowledged. Restore that terminal state before accepting
   // input or starting an enemy turn.

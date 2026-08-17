@@ -118,6 +118,25 @@ export const VISUAL_REVIEW_CASES: ReviewCase[] = [
   makeCase({ sceneId: "combat-states", cell: 28, view: "grayscale", note: "Statuses must be separable by shape and letter with no hue at all." }),
   makeCase({ sceneId: "combat-states", cell: 56, note: "Chip and marker construction inspected closely." }),
 
+  // Operator identity has to survive the same squint the archetypes do: if
+  // three roles read as one silhouette with different badges, the pass failed.
+  makeCase({ sceneId: "operator-roles", note: "Mark, relay, dash, guard tether, and brace on one board." }),
+  makeCase({ sceneId: "operator-roles", cell: 28, note: "Minimum size: role cues must not bury HP, AP, or the hit-chance pill." }),
+  makeCase({ sceneId: "operator-roles", view: "grayscale", note: "Roles must separate by shape and letter with no hue." }),
+
+  // Intent is the densest new text on the board and the most likely to turn it
+  // into a wall of labels, so it gets both extremes plus an animation strip for
+  // the locked-on pulse.
+  makeCase({ sceneId: "enemy-intent", note: "Four published plans at once: readable, and not covering their own units." }),
+  makeCase({ sceneId: "enemy-intent", cell: 28, note: "Minimum size: banners must stay legible without hiding the board." }),
+  makeCase({ sceneId: "enemy-intent", view: "squint", note: "The locked-on Marksman must win attention when detail is destroyed." }),
+  makeCase({
+    sceneId: "enemy-intent",
+    times: [0, 450, 900],
+    idPrefix: "enemy-intent-pulse",
+    note: "Pulse strip: the lock should read as urgent without flickering distractingly.",
+  }),
+
   makeCase({
     sceneId: "effects",
     times: [...EFFECT_STRIP_TIMES],

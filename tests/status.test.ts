@@ -11,6 +11,7 @@ import {
   setSuppressed,
   statusesAreClear,
   SUPPRESSION_TURNS,
+  MAX_SUPPRESSION_TURNS,
 } from "../src/status.ts";
 import {
   beginUnitTurn,
@@ -158,9 +159,9 @@ describe("status persistence", () => {
     const result = sanitizeLoadedMap(JSON.parse(JSON.stringify(map)));
     expect(result.report.hasErrors).toBe(false);
     expect(result.map!.units[0].statuses).toEqual({
+      ...createStatuses(),
       aimed: true,
       hunkered: true,
-      suppressed: 0,
     });
     expect(isSuppressed(result.map!.units[1])).toBe(true);
   });
@@ -191,9 +192,14 @@ describe("status persistence", () => {
     expect(result.map!.units[1].statuses).toBeUndefined();
   });
 
-  it("clamps a saved suppression that outlasts its documented duration", () => {
+  it("clamps a saved suppression to the longest the game can actually produce", () => {
+    // The ceiling is the upgraded duration, not the base one: a legitimately
+    // extended suppression must survive a reload intact.
+    expect(MAX_SUPPRESSION_TURNS).toBeGreaterThan(SUPPRESSION_TURNS);
     expect(sanitizeStatuses({ aimed: false, hunkered: false, suppressed: 99 }))
-      .toEqual({ aimed: false, hunkered: false, suppressed: SUPPRESSION_TURNS });
+      .toEqual({ ...createStatuses(), suppressed: MAX_SUPPRESSION_TURNS });
+    expect(sanitizeStatuses({ suppressed: SUPPRESSION_TURNS }))
+      .toEqual({ ...createStatuses(), suppressed: SUPPRESSION_TURNS });
   });
 
   it("rejects a malformed statuses object during validation", () => {

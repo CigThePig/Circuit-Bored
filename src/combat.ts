@@ -1,13 +1,25 @@
 import type { GameMap, Unit } from "./map.ts";
 import { getTile, inBounds, unitAt } from "./map.ts";
 import {
+  consumeOverwatchEvasion,
+  guardedBy,
   isAimed,
+  isBraced,
   isHunkered,
   isSuppressed,
+  overwatchEvasion,
   setAimed,
   setSuppressed,
+  statusesOf,
   SUPPRESSION_TURNS,
 } from "./status.ts";
+import {
+  rangeAccuracy,
+  rangeBandBetween,
+  rangeDamage,
+  tileDistance,
+  type RangeBand,
+} from "./range.ts";
 
 export const BASE_HIT = 0.85;
 export const COVER_PENALTY = 0.4;
@@ -39,6 +51,27 @@ export const EXPOSED_DAMAGE_BONUS = 1;
  * never do.
  */
 export const CROSSFIRE_MAX_COSINE = 0;
+
+/**
+ * Accuracy a marked target hands to the marker's squadmates.
+ *
+ * Calibrated against what the mark costs: one action point is half a shot, so
+ * a mark that only nudged accuracy was a net loss for a squad already hitting
+ * reliably. At this value plus the cover pierce below, calling a target is
+ * worth it exactly when the squad concentrates on something dug in - which is
+ * the coordination the action exists to reward.
+ */
+export const MARK_ACCURACY_BONUS = 0.15;
+/** How much of a marked target's cover the mark reads through. */
+export const MARK_COVER_PIERCE = 0.15;
+/** Damage a Guard link absorbs while the guardian is in position. */
+export const GUARD_DAMAGE_REDUCTION = 1;
+/** How far a guardian can be from the unit it protects, in eight-way steps. */
+export const GUARD_RANGE = 2;
+/** Damage a braced unit shrugs off. */
+export const BRACE_DAMAGE_REDUCTION = 1;
+/** Accuracy a braced unit adds to its own overwatch reactions. */
+export const BRACE_OVERWATCH_ACCURACY = 0.12;
 
 export function bresenhamLine(
   x0: number,
@@ -483,7 +516,18 @@ export type OverwatchCheck = {
   sawBefore: boolean;
   /** Can the watcher shoot the mover where the step ended? */
   seesAfter: boolean;
+  /**
+   * The reaction was in every way legal but the mover slipped it with a Dash
+   * charge. The watch is not consumed and the charge is: the next lane still
+   * costs. Callers must call `consumeOverwatchEvasion` when acting on this.
+   */
+  evaded: boolean;
 };
+
+/** Reaction shots one Overwatch grants this watcher. */
+export function overwatchReactions(watcher: Unit): number {
+  return 1 + Math.max(0, watcher.combat?.extraOverwatchReactions ?? 0);
+}
 
 /**
  * Does `watcher` get its reaction shot on a completed step from `from` to `to`?
@@ -518,12 +562,15 @@ export function checkOverwatch(
     trigger: null,
     sawBefore: false,
     seesAfter: false,
+    evaded: false,
   };
   if (!watcher.overwatch) return idle;
   if (watcher.hp <= 0) return idle;
   if (mover.hp <= 0) return idle;
   // A suppressed watcher is keeping its head down, not covering a lane.
   if (isSuppressed(watcher)) return idle;
+  // A watch that has already fired every reaction it has is spent.
+  if ((watcher.overwatchShotsUsed ?? 0) >= overwatchReactions(watcher)) return idle;
   // Standing still is not movement through controlled space.
   if (from.x === to.x && from.y === to.y) return idle;
 
@@ -542,14 +589,16 @@ export function checkOverwatch(
     mover.y = to.y;
     const seesAfter = canShootTarget(map, watcher, mover).canShoot;
     if (!seesAfter) {
-      return { fires: false, trigger: null, sawBefore, seesAfter };
+      return { fires: false, trigger: null, sawBefore, seesAfter, evaded: false };
     }
-    return {
-      fires: true,
-      trigger: sawBefore ? "watched_movement" : "emergence",
-      sawBefore,
-      seesAfter,
-    };
+    const trigger: OverwatchTrigger = sawBefore ? "watched_movement" : "emergence";
+    // A dashing unit is moving too fast for one reaction. The watch survives,
+    // so the next lane - or the next step of this one, once the charge is
+    // gone - still costs.
+    if (overwatchEvasion(mover) > 0) {
+      return { fires: false, trigger, sawBefore, seesAfter, evaded: true };
+    }
+    return { fires: true, trigger, sawBefore, seesAfter, evaded: false };
   } finally {
     mover.x = originalX;
     mover.y = originalY;
@@ -566,6 +615,29 @@ export function overwatchShouldFire(
   to: { x: number; y: number },
 ): boolean {
   return checkOverwatch(map, watcher, mover, from, to).fires;
+}
+
+/**
+ * Resolve one step against a watcher: fire, be slipped, or nothing. Spending
+ * the evasion charge and the reaction is done here so no caller can read the
+ * check without paying for its consequences.
+ */
+export function settleOverwatch(
+  map: GameMap,
+  watcher: Unit,
+  mover: Unit,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): OverwatchCheck {
+  const check = checkOverwatch(map, watcher, mover, from, to);
+  if (check.evaded) consumeOverwatchEvasion(mover);
+  if (check.fires) {
+    watcher.overwatchShotsUsed = (watcher.overwatchShotsUsed ?? 0) + 1;
+    if (watcher.overwatchShotsUsed >= overwatchReactions(watcher)) {
+      watcher.overwatch = false;
+    }
+  }
+  return check;
 }
 
 /**
@@ -734,14 +806,75 @@ export function exposedAgainst(
 }
 
 /**
- * Apply Suppressed to a unit. Breaking an established overwatch is part of the
- * effect: suppression is how a squad buys safe passage through a lane it does
- * not want to walk into, which only works if it actually clears the watch.
+ * Apply Suppressed to a unit. Breaking an established overwatch and a held aim
+ * is part of the effect: suppression is how a squad buys passage through a lane
+ * it does not want to walk into, and how it spoils a shooter that has settled
+ * on a target. Both only work if the state is actually cleared.
  */
-export function applySuppression(target: Unit): void {
-  setSuppressed(target, SUPPRESSION_TURNS);
+export function applySuppression(target: Unit, extraTurns = 0): void {
+  setSuppressed(target, SUPPRESSION_TURNS + Math.max(0, Math.floor(extraTurns)));
   target.overwatch = false;
   target.peekExposure = null;
+  // Nobody holds a bead through incoming fire. This is the counter to a
+  // telegraphed Marksman lock.
+  setAimed(target, false);
+}
+
+/**
+ * True when `shooter` benefits from a mark on `target`.
+ *
+ * The marker itself is excluded. Mark exists to make a squad shoot better
+ * together, and letting Rook mark for its own shot would quietly turn a
+ * coordination tool into a personal damage button.
+ */
+export function markBenefits(shooter: Unit, target: Unit): boolean {
+  const statuses = statusesOf(target);
+  if (statuses.marked <= 0) return false;
+  if (shooter.team === target.team) return false;
+  return statuses.markedBy === null || statuses.markedBy !== shooter.id;
+}
+
+/**
+ * The unit that called this target, if it is still on the board. The mark's
+ * strength belongs to whoever made the call, not to whoever is shooting, so
+ * an upgraded designator improves every squadmate's shot rather than only the
+ * shots of squadmates who happen to carry the same circuit.
+ */
+export function markerOf(map: GameMap, target: Unit): Unit | null {
+  const markerId = statusesOf(target).markedBy;
+  if (!markerId) return null;
+  return map.units.find((u) => u.id === markerId && u.hp > 0) ?? null;
+}
+
+/**
+ * The ally currently protecting `unit` with Guard, or null. Resolved against
+ * live board state every time: the guardian has to still exist, still be
+ * alive, still be on the same side, and still be close enough. A stale id in a
+ * save therefore protects nobody.
+ */
+export function activeGuardian(map: GameMap, unit: Unit): Unit | null {
+  const guardianId = guardedBy(unit);
+  if (!guardianId) return null;
+  for (const candidate of map.units) {
+    if (candidate.id !== guardianId) continue;
+    if (candidate.hp <= 0) return null;
+    if (candidate.team !== unit.team) return null;
+    if (candidate.id === unit.id) return null;
+    if (tileDistance(candidate, unit) > GUARD_RANGE) return null;
+    return candidate;
+  }
+  return null;
+}
+
+/** Damage a hit on `target` loses to Guard and Brace, on top of its own armour. */
+export function protectionFor(map: GameMap, target: Unit): number {
+  let reduction = 0;
+  const guardian = activeGuardian(map, target);
+  if (guardian) {
+    reduction += GUARD_DAMAGE_REDUCTION + (guardian.combat?.guardDamageReduction ?? 0);
+  }
+  if (isBraced(target)) reduction += BRACE_DAMAGE_REDUCTION;
+  return reduction;
 }
 
 /**
@@ -799,11 +932,20 @@ export type ShotPreview = {
   targetHunkered: boolean;
   /** True when the shooter is firing under Suppressed. */
   shooterSuppressed: boolean;
+  /** Range band this shot is taken at. */
+  band: RangeBand;
+  /** Tiles between shooter and target. */
+  distance: number;
+  /** True when the shooter is benefiting from an ally's mark on the target. */
+  usesMark: boolean;
+  /** Damage the target's Guard and Brace are absorbing from this shot. */
+  protection: number;
 };
 
 /** Damage a hit from `shooter` deals to `target`, before Exposed bonuses. */
-function baseShotDamage(shooter: Unit): number {
+function baseShotDamage(shooter: Unit, band: RangeBand): number {
   return SHOT_DAMAGE + (shooter.combat?.damageBonus ?? 0) +
+    rangeDamage(shooter.combat, band) +
     (shooter.resolvingOverwatch ? shooter.combat?.overwatchDamageBonus ?? 0 : 0);
 }
 
@@ -825,8 +967,12 @@ export function previewShot(
   const hunkerBonus = hunkered
     ? (cover > 0 ? HUNKER_COVER_BONUS : HUNKER_OPEN_BONUS)
     : 0;
+  // A mark reads through part of whatever the target is hiding behind, which
+  // is what lets a squad shoot a dug-in defender without first dislodging it.
+  const usesMark = shot.canShoot && markBenefits(shooter, target);
+  const markPierce = usesMark ? Math.min(cover, MARK_COVER_PIERCE) : 0;
   const defendedCover = cover > 0
-    ? cover + (targetProfile?.coverDefenseBonus ?? 0)
+    ? Math.max(0, cover + (targetProfile?.coverDefenseBonus ?? 0) - markPierce)
     : 0;
   const peekPenalty = shot.mode === "peek"
     ? Math.max(0, PEEK_PENALTY - (profile?.peekPenaltyReduction ?? 0))
@@ -847,14 +993,30 @@ export function previewShot(
   }
   if (shooter.resolvingOverwatch) {
     accuracyBonus += profile?.overwatchAccuracyBonus ?? 0;
+    // A braced anchor covers its lane better than it shoots on its own turn.
+    if (isBraced(shooter)) accuracyBonus += BRACE_OVERWATCH_ACCURACY;
   }
   const usesAim = shot.canShoot && isAimed(shooter);
   if (usesAim) accuracyBonus += AIM_ACCURACY_BONUS;
   const shooterSuppressed = isSuppressed(shooter);
   if (shooterSuppressed) accuracyBonus -= SUPPRESSED_ACCURACY_PENALTY;
   const exposed = shot.canShoot ? exposedAgainst(map, shooter, target) : null;
-  if (exposed) accuracyBonus += EXPOSED_ACCURACY_BONUS;
-  const bonusDamage = exposed ? EXPOSED_DAMAGE_BONUS : 0;
+  if (exposed) {
+    accuracyBonus += EXPOSED_ACCURACY_BONUS + (profile?.exposedAccuracyBonus ?? 0);
+  }
+  if (usesMark) {
+    accuracyBonus += MARK_ACCURACY_BONUS +
+      (markerOf(map, target)?.combat?.markAccuracyBonus ?? 0);
+  }
+  // Reach is a property of the weapon, so it applies to the shooter's accuracy
+  // the same way its other traits do.
+  const distance = tileDistance(shooter, target);
+  const band = rangeBandBetween(shooter, target);
+  accuracyBonus += rangeAccuracy(profile, band);
+
+  const bonusDamage = (exposed ? EXPOSED_DAMAGE_BONUS : 0) +
+    (usesAim ? profile?.aimDamageBonus ?? 0 : 0);
+  const protection = shot.canShoot ? protectionFor(map, target) : 0;
   const targetPoint = shot.targetExposure && target.peekExposure
     ? { ...target.peekExposure }
     : { x: target.x, y: target.y };
@@ -869,11 +1031,16 @@ export function previewShot(
     bonusDamage,
     damage: Math.max(
       1,
-      baseShotDamage(shooter) + bonusDamage - (target.combat?.damageReduction ?? 0),
+      baseShotDamage(shooter, band) + bonusDamage -
+        (target.combat?.damageReduction ?? 0) - protection,
     ),
     usesAim,
     targetHunkered: hunkered && cover > 0,
     shooterSuppressed,
+    band,
+    distance,
+    usesMark,
+    protection,
   };
 }
 
@@ -909,6 +1076,14 @@ export function resolveShot(
     shooter.encounterShots = (shooter.encounterShots ?? 0) + 1;
     // Aim is a prepared shot, so it is spent whether or not the shot lands.
     if (preview.usesAim) setAimed(shooter, false);
+    // Reward for shooting from the angle you manoeuvred to get, capped at once
+    // per turn so it pays for the reposition rather than funding a whole extra
+    // turn of shooting.
+    const refund = shooter.combat?.flankApRefund ?? 0;
+    if (refund > 0 && preview.exposed && (shooter.flankRefundsThisTurn ?? 0) === 0) {
+      shooter.flankRefundsThisTurn = 1;
+      shooter.ap = Math.min(shooter.maxAp, shooter.ap + refund);
+    }
   }
   if (hit) {
     const wasAlive = target.hp > 0;

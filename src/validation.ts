@@ -2,6 +2,7 @@ import type { GameMap, TileType, Unit } from "./map.ts";
 import { UNIT_AP, UNIT_HP, generateUnitId } from "./map.ts";
 import { DEFAULT_LEVEL_THEME_ID, isLevelThemeId } from "./themes.ts";
 import { isValidStatuses, sanitizeStatuses } from "./status.ts";
+import { isValidIntent, sanitizeIntent } from "./intent.ts";
 import {
   isEnvironmentProfile,
   isFloorTreatmentId,
@@ -304,6 +305,14 @@ export function validateMap(map: GameMap): ValidationReport {
         { unitId: u.id },
       );
     }
+    if (!isValidIntent(u.intent)) {
+      pushError(
+        issues,
+        "INVALID_UNIT_INTENT",
+        `Unit '${u.id}' has a malformed intent record.`,
+        { unitId: u.id },
+      );
+    }
   }
 
   // Stacked living units on the same tile.
@@ -576,6 +585,10 @@ export function sanitizeLoadedMap(raw: unknown): {
     // Absent or malformed statuses degrade to "nothing active" rather than
     // failing the load, so a save written before statuses existed still opens.
     const statuses = sanitizeStatuses(u.statuses);
+    // Intent is a cached plan, so a malformed one is dropped rather than
+    // repaired: the next planning pass regenerates it, and showing nothing
+    // beats showing a prediction the AI never made.
+    const intent = sanitizeIntent(u.intent);
 
     cleanedUnits.push({
       id,
@@ -589,6 +602,7 @@ export function sanitizeLoadedMap(raw: unknown): {
       overwatch,
       peekExposure: null,
       ...(statuses ? { statuses } : {}),
+      ...(intent ? { intent } : {}),
     });
   }
 

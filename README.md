@@ -3,6 +3,55 @@
 A fast, browser-based tactical roguelike built around action points, cover,
 line of sight, corner peeking, committed exposure, and overwatch.
 
+## Operators
+
+The squad is three different tools, not three stat lines. Each operator has
+abilities the others cannot use at all, and a range band its weapon actually
+wants the fight to happen in.
+
+| Operator | Role | Abilities | Best at |
+| --- | --- | --- | --- |
+| Rook | Coordinator | **Mark Target** (1 AP) — squadmates, *not* Rook, gain accuracy against the called target and read through part of its cover. **Relay** (1 AP) — hand one action point to a squadmate, once per turn. | Medium |
+| Vex | Infiltrator | **Dash** (1 AP) — action points buy more ground for the rest of the turn, and the first reaction shot aimed at Vex is slipped. Must be used before moving. | Close |
+| Hex | Anchor | **Guard** (1 AP) — soften hits on a squadmate within 2 tiles. **Brace** (1 AP) — soften incoming hits, ignore suppression's AP cost, sharpen your overwatch; cancelled by moving. | Medium |
+
+Mark deliberately excludes the marker: it is a coordination tool, and letting
+Rook mark for its own shot would make it a personal damage buff. Relay moves an
+action point and never creates one — one out, at most one in, once per turn.
+
+## Range
+
+Three bands, measured with the same eight-way distance movement uses:
+**close** (1–3), **medium** (4–8), **long** (9+). A band changes accuracy, and
+for a few weapons damage. No unit is useless outside its band; it just pays for
+being there.
+
+## Enemies
+
+Each hostile is dangerous for a reason you can name and beatable by a plan that
+follows from it. Select **Intel** and tap one to read its role, its weakness,
+its current plan, and how to break that plan.
+
+| Enemy | Dangerous because | Beaten by |
+| --- | --- | --- |
+| Scrapper | Lethal at knife range, and fast | Controlling the ground it must cross. Nearly harmless at distance. |
+| Rifleman | Nothing special — the benchmark | Ordinary cover and focus fire |
+| Marksman | Locks onto a target one turn before firing, then hits very hard | Breaking line of sight, suppressing it, rushing it, or killing it before the shot |
+| Sentinel | Holds a lane with overwatch and suppressing fire; armoured | Flanking, crossfire, or suppression — a head-on trade is a bad deal |
+
+## Enemy intent
+
+Every hostile publishes what it means to do next, as a banner over its unit:
+`AIMING AT VEX`, `CLOSING ON ROOK`, `SETTING WATCH`. A locked-on shot inverts to
+a bright plate with a thread to its target, because it is the one plan you have
+to answer this turn.
+
+Intent comes from the AI's own planner (`planEnemyIntent` in `src/ai.ts`), never
+from the UI guessing: the renderer shows the stored plan and `takeEnemyAction`
+executes against the same function. Plans are replanned at the top of each
+enemy turn, so breaking a firing line genuinely changes what the enemy does —
+intent is information about a plan, not a promise.
+
 ## Combat actions
 
 A turn is not just move-and-shoot. Every deliberate action is a definition in
@@ -66,8 +115,12 @@ continue to use their separate `circuit-bored.map.v1` format.
 
 - `src/combat.ts`, `src/ai.ts`, and `src/runtime.ts` contain the tactical match.
 - `src/actions.ts` is the registry of non-movement combat actions; it is the
-  only place their AP is charged.
+  only place their AP is charged, and where each operator's role abilities are
+  gated to its archetype.
 - `src/status.ts` owns temporary tactical states and their sanitisation.
+- `src/range.ts` owns range bands and per-unit range profiles.
+- `src/intent.ts` owns the shape and persistence of an enemy plan; the planner
+  itself lives in `src/ai.ts`, because planning is the AI's job.
 - `src/rules.ts` owns the action-point economy and the turn lifecycle
   (`beginUnitTurn`, `endUnitTurn`, `onUnitMoved`), which is where every status
   duration is enforced. `src/movement.ts` owns walking geometry and the

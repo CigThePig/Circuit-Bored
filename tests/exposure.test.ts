@@ -10,6 +10,7 @@ import {
   previewShot,
   resolveShot,
 } from "../src/combat.ts";
+import { EMPTY_COMBAT_PROFILE } from "../src/map.ts";
 import { buildMap } from "./fixtures.ts";
 
 const alwaysHit = () => 0;
@@ -231,22 +232,7 @@ describe("Exposed payoff", () => {
       { team: "enemy", x: 3, y: 1 },
     ]);
     const [player, enemy] = map.units;
-    enemy.combat = {
-      accuracyBonus: 0,
-      damageBonus: 0,
-      damageReduction: 2,
-      coverDefenseBonus: 0,
-      peekPenaltyReduction: 0,
-      uncoveredAccuracyBonus: 0,
-      firstShotAccuracyBonus: 0,
-      stationaryAccuracyBonus: 0,
-      lowHealthAccuracyBonus: 0,
-      firstMoveFree: false,
-      killApRefund: 0,
-      killHeal: 0,
-      overwatchAccuracyBonus: 0,
-      overwatchDamageBonus: 0,
-    };
+    enemy.combat = { ...EMPTY_COMBAT_PROFILE, damageReduction: 2 };
     const preview = previewShot(map, player, enemy);
     expect(preview.damage).toBe(SHOT_DAMAGE + EXPOSED_DAMAGE_BONUS - 2);
   });

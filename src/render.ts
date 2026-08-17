@@ -108,6 +108,30 @@ export type WatchedTile = {
   y: number;
 };
 
+/**
+ * An enemy's published plan, drawn as a small banner over its cell. The text
+ * comes from the AI's own planner via `intentLabel`; this module never decides
+ * what an enemy is doing.
+ */
+export type IntentMarker = {
+  x: number;
+  y: number;
+  label: string;
+  /** A locked-on shot is the one plan worth shouting about. */
+  urgent?: boolean;
+  /** Tile the plan points at, when showing the thread helps read it. */
+  toX?: number;
+  toY?: number;
+};
+
+/** A Guard relationship, drawn as a short tether between the two units. */
+export type GuardLink = {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+};
+
 export type CoverIndicator = {
   x: number;
   y: number;
@@ -209,6 +233,10 @@ export type RenderState = {
   threatMarkers?: ThreatMarker[];
   /** Enemy-overwatched tiles inside the selected unit's movement radius. */
   watchedTiles?: WatchedTile[];
+  /** Published enemy plans. Rendered above their units, below the HUD text. */
+  intentMarkers?: IntentMarker[];
+  /** Active Guard tethers between an anchor and the squadmate it shields. */
+  guardLinks?: GuardLink[];
   sightLines?: SightLine[];
   shotEffects?: ShotEffect[];
   movementEffects?: MovementEffect[];
@@ -328,6 +356,12 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
     drawHighlight(ctx, h.x * cell, h.y * cell, cell, h.fill);
   }
 
+  // Guard tethers sit under the units they join, so the link reads as ground
+  // between two operators rather than as something painted on top of them.
+  if (state.guardLinks && state.guardLinks.length > 0) {
+    for (const link of state.guardLinks) drawGuardLink(ctx, cell, link);
+  }
+
   if (state.sightLines && state.sightLines.length > 0) {
     for (const line of state.sightLines) {
       drawSightLine(ctx, cell, line);
@@ -406,10 +440,130 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
     drawEnemyPreview(ctx, p.x * cell, p.y * cell, cell, p);
   }
 
+  // Intent is the last gameplay layer: it is what the player reads while
+  // deciding, so nothing may cover it except transient combat text.
+  if (state.intentMarkers && state.intentMarkers.length > 0) {
+    for (const marker of state.intentMarkers) {
+      drawIntentMarker(ctx, cell, marker, mapHeightPx, now);
+    }
+  }
+
   for (const t of state.floatingTexts) {
     if (t.expiresAt < now) continue;
     drawFloatingText(ctx, cell, t);
   }
+}
+
+/**
+ * A short banner above an enemy naming its plan.
+ *
+ * Sits above the cell, where the HP chip would be for a player unit, and
+ * shrinks its text rather than its plate so the plan stays legible at the 28 px
+ * minimum. A locked-on shot pulses and carries a thread to its target, because
+ * that is the one plan the player has to answer this turn.
+ */
+function drawIntentMarker(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  marker: IntentMarker,
+  mapHeightPx: number,
+  nowMs: number,
+): void {
+  const px = marker.x * cell;
+  const py = marker.y * cell;
+  const fontSize = Math.max(6, Math.floor(cell * 0.17));
+  ctx.save();
+  ctx.font = `800 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const textW = ctx.measureText(marker.label).width;
+  const padX = Math.max(2, cell * 0.06);
+  const plateW = textW + padX * 2;
+  const plateH = fontSize + Math.max(3, cell * 0.08);
+  const cx = px + cell / 2;
+  // Stack above the HP chip rather than on top of it. The chip's own geometry
+  // is recomputed here so the two cannot drift apart: at 28 px the banner sat
+  // directly over the hit points, which is the number the player needs most.
+  const chipFont = Math.max(7, Math.floor(cell * 0.22));
+  const chipH = chipFont + Math.max(4, cell * 0.09);
+  const aboveY = py - chipH - plateH - Math.max(2, cell * 0.07);
+  const plateY = aboveY >= 0 ? aboveY : Math.min(py + cell + cell * 0.30, mapHeightPx - plateH);
+  const plateX = Math.max(0, Math.min(cx - plateW / 2, ctx.canvas.width));
+
+  if (marker.urgent && marker.toX !== undefined && marker.toY !== undefined) {
+    // A thin thread from the shooter to whoever it has settled on.
+    ctx.strokeStyle = PALETTE.INTENT_AIM;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = Math.max(1, cell * 0.03);
+    ctx.setLineDash([cell * 0.10, cell * 0.10]);
+    ctx.beginPath();
+    ctx.moveTo(cx, py + cell / 2);
+    ctx.lineTo(marker.toX * cell + cell / 2, marker.toY * cell + cell / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  const pulse = marker.urgent
+    ? 0.75 + 0.25 * (Math.sin((nowMs / 900) * Math.PI * 2) * 0.5 + 0.5)
+    : 1;
+  roundRect(ctx, plateX, plateY, plateW, plateH, Math.max(1, plateH * 0.22));
+  // A locked-on shot inverts: bright plate, dark text. Colour alone made every
+  // banner look identical under squint and in grayscale, and this is the one
+  // plan the player has to answer this turn, so its urgency is carried by
+  // value rather than by hue.
+  ctx.fillStyle = marker.urgent ? PALETTE.INTENT_AIM : PALETTE.INTENT_PLATE;
+  ctx.fill();
+  ctx.strokeStyle = marker.urgent ? PALETTE.INTENT_AIM : PALETTE.INTENT_EDGE;
+  ctx.globalAlpha = pulse;
+  ctx.lineWidth = marker.urgent ? Math.max(1.5, cell * 0.035) : 1;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = marker.urgent ? PALETTE.INTENT_PLATE : PALETTE.INTENT_TEXT;
+  ctx.fillText(marker.label, plateX + plateW / 2, plateY + plateH / 2 + 0.5);
+
+  if (marker.urgent) {
+    // A caret pointing back down at the shooter, so the bright bar stays tied
+    // to its unit once the text itself is unreadable.
+    const notch = Math.max(2, cell * 0.09);
+    ctx.fillStyle = PALETTE.INTENT_AIM;
+    ctx.beginPath();
+    ctx.moveTo(cx - notch, plateY + plateH);
+    ctx.lineTo(cx + notch, plateY + plateH);
+    ctx.lineTo(cx, plateY + plateH + notch);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** A short tether from an anchor to the squadmate its Guard is shielding. */
+function drawGuardLink(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  link: GuardLink,
+): void {
+  const ax = link.fromX * cell + cell / 2;
+  const ay = link.fromY * cell + cell / 2;
+  const bx = link.toX * cell + cell / 2;
+  const by = link.toY * cell + cell / 2;
+  ctx.save();
+  ctx.strokeStyle = PALETTE.GUARD_LINK;
+  ctx.lineWidth = Math.max(1.5, cell * 0.055);
+  ctx.lineCap = "round";
+  ctx.setLineDash([cell * 0.16, cell * 0.12]);
+  ctx.beginPath();
+  ctx.moveTo(ax, ay + cell * 0.22);
+  ctx.lineTo(bx, by + cell * 0.22);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // A small brace at the protected end so the direction of the link is legible
+  // without following the dashes.
+  ctx.fillStyle = PALETTE.GUARD;
+  ctx.beginPath();
+  ctx.arc(bx, by + cell * 0.22, Math.max(1.5, cell * 0.06), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function tileHash(x: number, y: number): number {
@@ -1964,9 +2118,15 @@ function statusChipsFor(u: Unit): StatusChip[] {
   if (statuses && statuses.suppressed > 0) {
     chips.push({ letter: "S", color: PALETTE.SUPPRESSED });
   }
+  if (statuses && statuses.marked > 0) {
+    chips.push({ letter: "X", color: PALETTE.MARKED });
+  }
   if (u.overwatch) chips.push({ letter: "W", color: PALETTE.OVERWATCH });
   if (statuses?.aimed) chips.push({ letter: "A", color: PALETTE.AIM });
+  if (statuses?.braced) chips.push({ letter: "B", color: PALETTE.BRACE });
   if (statuses?.hunkered) chips.push({ letter: "H", color: PALETTE.HUNKER });
+  if (statuses?.dashing) chips.push({ letter: "D", color: PALETTE.DASH });
+  if (statuses?.guardedBy) chips.push({ letter: "G", color: PALETTE.GUARD });
   return chips.slice(0, 2);
 }
 
