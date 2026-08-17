@@ -247,6 +247,33 @@ export function requiredSceneIds(cases: readonly ReviewCase[]): string[] {
   return [...new Set(cases.map((entry) => entry.sceneId))].filter((id) => id !== SEED_SCENE_ID);
 }
 
+/**
+ * Split cases into the ones an older build can render and the scenes it has
+ * never heard of.
+ *
+ * A branch that adds a lab scene asks the baseline commit to render something
+ * that did not exist there, which the lab treats as a hard error. Rendering a
+ * "before" image for a brand-new scene is meaningless anyway, so those cases
+ * are set aside and reported instead of crashing the run - the review is
+ * supposed to inform a judgement, not gate a merge on one.
+ */
+export function partitionByKnownScenes(
+  cases: readonly ReviewCase[],
+  knownSceneIds: readonly string[],
+): { renderable: ReviewCase[]; newSceneIds: string[] } {
+  const known = new Set(knownSceneIds);
+  const renderable: ReviewCase[] = [];
+  const newSceneIds: string[] = [];
+  for (const entry of cases) {
+    if (known.has(entry.sceneId)) {
+      renderable.push(entry);
+    } else if (!newSceneIds.includes(entry.sceneId)) {
+      newSceneIds.push(entry.sceneId);
+    }
+  }
+  return { renderable, newSceneIds };
+}
+
 /** Expand one case into the concrete capture requests it produces. */
 export function captureRequests(entry: ReviewCase): { params: CaptureParams; fileName: string; timeMs: number }[] {
   const strip = entry.times.length > 1;

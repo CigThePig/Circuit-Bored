@@ -188,6 +188,30 @@ function describeDiagnostics(diagnostics: readonly PageDiagnostic[]): string {
   return `\n  browser output:\n    ${problems.map((entry) => `[${entry.kind}] ${entry.text}`).join("\n    ")}`;
 }
 
+/**
+ * Every scene id the lab served from `origin` knows how to render.
+ *
+ * Read straight off the capture bridge, which is installed before the lab
+ * tries to honour any request - so this answers "what does this build know
+ * about?" even when the request that opened the page names a scene it has
+ * never heard of. A baseline built from an older commit is exactly that case.
+ */
+export async function readSceneIds(browser: Browser, origin: string): Promise<string[]> {
+  const context = await browser.newContext({ viewport: { width: 640, height: 480 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${origin}/visual-lab.html?capture=1`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => Boolean(window.__CIRCUIT_BORED_VISUAL__),
+      undefined,
+      { timeout: READY_TIMEOUT_MS },
+    );
+    return await page.evaluate(() => [...(window.__CIRCUIT_BORED_VISUAL__?.sceneIds ?? [])]);
+  } finally {
+    await context.close();
+  }
+}
+
 /** Run every case, writing PNGs under `outDir`. */
 export async function captureCases(browser: Browser, options: CaptureRunOptions): Promise<CapturedCase[]> {
   const context = await browser.newContext({
