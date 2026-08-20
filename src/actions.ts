@@ -230,7 +230,7 @@ const hunkerAction: CombatActionDefinition = {
   apCost: HUNKER_AP_COST,
   targeting: "self",
   description:
-    "Press into adjacent cover until your next turn. Worth little in the open.",
+    "Press into adjacent cover until your next turn or until you move. Worth little in the open.",
   activation: (_map, unit) => {
     if (isHunkered(unit)) return no("Already hunkered.");
     return OK;
@@ -238,7 +238,7 @@ const hunkerAction: CombatActionDefinition = {
   preview: (map, unit) => ({
     actionId: "hunker",
     detail: hasAdjacentCover(map, unit.x, unit.y)
-      ? "Deepens adjacent cover until your next turn, and drops your lean."
+      ? "Deepens adjacent cover until your next turn or until you move, and drops your lean."
       : "No adjacent cover: this would give almost no protection here.",
   }),
   execute: (_map, unit) => {
@@ -311,7 +311,7 @@ const overwatchAction: CombatActionDefinition = {
   targeting: "self",
   description:
     "Cover the ground you can shoot into. The first hostile that moves " +
-    "through it takes one reaction shot. Remaining AP is kept.",
+    "through it takes one reaction shot. Remaining AP is kept. Moving cancels it.",
   activation: (_map, unit) => {
     if (unit.overwatch) return no("Already watching.");
     if (isSuppressed(unit)) return no("Suppressed.");
@@ -319,7 +319,7 @@ const overwatchAction: CombatActionDefinition = {
   },
   preview: () => ({
     actionId: "overwatch",
-    detail: "One reaction shot at the first hostile that moves in your firing arc.",
+    detail: "One reaction shot at the first hostile that moves in your firing arc. Moving cancels it.",
   }),
   execute: (_map, unit) => {
     unit.overwatch = true;

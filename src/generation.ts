@@ -1,5 +1,6 @@
 import {
   makeArchetypeUnit,
+  maxApWithUpgrades,
   type UnitArchetypeId,
   type UpgradeId,
 } from "./content.ts";
@@ -163,11 +164,7 @@ function addSquads(
     unit.displayName = member.name;
     unit.maxHp = member.maxHp;
     unit.hp = Math.min(member.hp, member.maxHp);
-    unit.maxAp = Math.max(1, member.baseMaxAp + upgrades.reduce((sum, id) => {
-      if (id === "auxiliary_cell") return sum + 1;
-      if (id === "volatile_cell") return sum + 2;
-      return sum;
-    }, 0));
+    unit.maxAp = maxApWithUpgrades(member.baseMaxAp, upgrades);
     unit.ap = unit.maxAp;
     map.units.push(unit);
   }

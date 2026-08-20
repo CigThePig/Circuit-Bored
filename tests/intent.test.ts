@@ -112,13 +112,18 @@ describe("intent is the AI's own plan", () => {
     expect(dead.intent).toBeUndefined();
   });
 
-  it("matches what the planner would say when asked again", () => {
+  it("matches what the planner says from the enemy's next-turn state", () => {
     const { map } = lane("sentinel");
+    const enemy = map.units.find((unit) => unit.team === "enemy")!;
+    enemy.ap = 0;
+    enemy.movesThisTurn = 4;
     refreshEnemyIntents(map);
-    for (const unit of map.units) {
-      if (unit.team !== "enemy") continue;
-      expect(planEnemyIntent(map, unit)).toEqual(unit.intent);
-    }
+    const published = enemy.intent;
+
+    const forecast = cloneMap(map);
+    const forecastEnemy = forecast.units.find((unit) => unit.id === enemy.id)!;
+    beginUnitTurn(forecastEnemy);
+    expect(planEnemyIntent(forecast, forecastEnemy)).toEqual(published);
   });
 
   it("does not consume randomness, so inspecting an enemy leaks no die roll", () => {

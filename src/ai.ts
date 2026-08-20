@@ -1,10 +1,11 @@
 import type { GameMap, Unit } from "./map.ts";
-import { isPassable, unitAt } from "./map.ts";
+import { cloneMap, isPassable, unitAt } from "./map.ts";
 import {
   canStep,
   computeMovementField,
   diagonalIsClear,
   isOpenTerrain,
+  movementPath,
   MOVE_DIRECTIONS,
   ORTHOGONAL_DIRECTIONS,
 } from "./movement.ts";
@@ -15,10 +16,12 @@ import {
   exposedAgainst,
   hasAdjacentCover,
   hasStrictLineOfSight,
+  overwatchReactions,
   previewShot,
   resolveShot,
   shotHitPenalty,
   targetCoverPenalty,
+  watchedTiles,
   type ShotResult,
 } from "./combat.ts";
 import {
@@ -30,12 +33,13 @@ import {
   SHOOT_AP_COST,
   SUPPRESS_AP_COST,
 } from "./actions.ts";
-import { isAimed, isHunkered, isSuppressed } from "./status.ts";
-import { onUnitMoved } from "./rules.ts";
+import { isAimed, isHunkered, isSuppressed, setAimed } from "./status.ts";
+import { beginUnitTurn, onUnitMoved } from "./rules.ts";
 import {
   bandTargetDistance,
   preferredBand,
   rangeBandBetween,
+  rangeRating,
   tileDistance,
   type RangeBand,
 } from "./range.ts";
@@ -60,65 +64,42 @@ export const AI_SCORE_ADJACENT_ALLY = -5;
 export const AI_SCORE_DISTANCE = -1;
 export const AI_SCORE_EXPOSED = -20;
 export const AI_SCORE_PEEK_EXPOSURE_RISK = -70;
-/**
- * Standing where a player on overwatch can shoot is worth about as much as
- * losing the shot the move was made for. It is a weight rather than a ban so
- * an enemy still walks a watched lane when the position on the far side is
- * clearly worth the reaction shot.
- */
 export const AI_SCORE_OVERWATCH_LANE = -110;
-/** Bonus for a destination that turns the target's own cover against it. */
 export const AI_SCORE_EXPOSES_TARGET = 45;
-/**
- * Weight on standing in the band this unit's weapon actually wants. It is what
- * turns a range profile into behaviour: a Scrapper walks into knife range and
- * a Marksman backs off to keep a long lane, without either being scripted.
- */
 export const AI_SCORE_PREFERRED_BAND = 55;
-/** Per-tile pull toward the ideal distance inside that band. */
 export const AI_SCORE_BAND_DRIFT = -4;
 
 function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
 }
 
-/** Steps of eight-way movement between two tiles on open ground. */
 function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
 
 function livingPlayers(map: GameMap): Unit[] {
-  const out: Unit[] = [];
-  for (const u of map.units) {
-    if (u.team === "player" && u.hp > 0) out.push(u);
-  }
-  return out;
+  return map.units.filter((unit) => unit.team === "player" && unit.hp > 0);
 }
 
 function closestPlayer(map: GameMap, enemy: Unit): Unit | null {
   let best: Unit | null = null;
   let bestDist = Infinity;
-  for (const u of livingPlayers(map)) {
-    // Larger compartmentalized maps can make the Manhattan-nearest unit much
-    // farther away in real movement terms. Prefer reachable route distance so
-    // enemies do not press against the wrong side of a bulkhead.
-    const d = aStarRoute(map, enemy.x, enemy.y, u.x, u.y)?.distance
-      ?? manhattan(enemy.x, enemy.y, u.x, u.y) + map.width * map.height;
-    if (d < bestDist) {
-      bestDist = d;
-      best = u;
+  for (const player of livingPlayers(map)) {
+    const distance = aStarRoute(map, enemy.x, enemy.y, player.x, player.y)?.distance
+      ?? manhattan(enemy.x, enemy.y, player.x, player.y) + map.width * map.height;
+    if (distance < bestDist) {
+      bestDist = distance;
+      best = player;
     }
   }
   return best;
 }
 
 function visiblePlayers(map: GameMap, enemy: Unit): Unit[] {
-  const out: Unit[] = [];
-  for (const u of livingPlayers(map)) {
-    if (canShootTarget(map, enemy, u).canShoot) out.push(u);
-  }
-  return out;
+  return livingPlayers(map).filter((player) => canShootTarget(map, enemy, player).canShoot);
 }
+
+type Point = { x: number; y: number };
 
 type AStarNode = {
   x: number;
@@ -129,8 +110,9 @@ type AStarNode = {
 };
 
 type AStarRoute = {
-  next: { x: number; y: number };
+  next: Point;
   distance: number;
+  path: Point[];
 };
 
 function aStarRoute(
@@ -141,16 +123,11 @@ function aStarRoute(
   ty: number,
 ): AStarRoute | null {
   if (sx === tx && sy === ty) return null;
-
   const passable = (x: number, y: number): boolean => {
     if (!isOpenTerrain(map, x, y)) return false;
-    // The destination may hold the unit being routed toward; the route ends
-    // beside it, never on it, but it still has to be expandable as a goal.
     if (x === tx && y === ty) return true;
-    if (unitAt(map, x, y)) return false;
-    return true;
+    return unitAt(map, x, y) === null;
   };
-
   const key = (x: number, y: number) => `${x},${y}`;
   const start: AStarNode = {
     x: sx,
@@ -160,8 +137,7 @@ function aStarRoute(
     parent: null,
   };
   const open: AStarNode[] = [start];
-  const openMap = new Map<string, AStarNode>();
-  openMap.set(key(sx, sy), start);
+  const openMap = new Map<string, AStarNode>([[key(sx, sy), start]]);
   const closed = new Set<string>();
 
   while (open.length > 0) {
@@ -169,83 +145,70 @@ function aStarRoute(
     for (let i = 1; i < open.length; i++) {
       if (open[i].f < open[bestIdx].f) bestIdx = i;
     }
-    const cur = open.splice(bestIdx, 1)[0];
-    openMap.delete(key(cur.x, cur.y));
-    closed.add(key(cur.x, cur.y));
+    const current = open.splice(bestIdx, 1)[0];
+    openMap.delete(key(current.x, current.y));
+    closed.add(key(current.x, current.y));
 
-    if (cur.x === tx && cur.y === ty) {
-      let n: AStarNode = cur;
-      while (n.parent && n.parent.parent) n = n.parent;
-      if (!n.parent) return null;
-      return { next: { x: n.x, y: n.y }, distance: cur.g };
+    if (current.x === tx && current.y === ty) {
+      const path: Point[] = [];
+      let node: AStarNode | null = current;
+      while (node?.parent) {
+        path.push({ x: node.x, y: node.y });
+        node = node.parent;
+      }
+      path.reverse();
+      return path.length > 0 ? { next: path[0], distance: current.g, path } : null;
     }
 
-    for (const d of MOVE_DIRECTIONS) {
-      const nx = cur.x + d.x;
-      const ny = cur.y + d.y;
-      const k = key(nx, ny);
-      if (closed.has(k)) continue;
-      if (!passable(nx, ny)) continue;
-      if (!diagonalIsClear(map, cur.x, cur.y, nx, ny)) continue;
-      const g = cur.g + 1;
-      const existing = openMap.get(k);
+    for (const direction of MOVE_DIRECTIONS) {
+      const nx = current.x + direction.x;
+      const ny = current.y + direction.y;
+      const nodeKey = key(nx, ny);
+      if (closed.has(nodeKey) || !passable(nx, ny)) continue;
+      if (!diagonalIsClear(map, current.x, current.y, nx, ny)) continue;
+      const g = current.g + 1;
+      const existing = openMap.get(nodeKey);
       if (existing && existing.g <= g) continue;
       const node: AStarNode = {
         x: nx,
         y: ny,
         g,
         f: g + chebyshev(nx, ny, tx, ty),
-        parent: cur,
+        parent: current,
       };
       if (existing) {
-        const idx = open.indexOf(existing);
-        if (idx >= 0) open.splice(idx, 1);
+        const index = open.indexOf(existing);
+        if (index >= 0) open.splice(index, 1);
       }
       open.push(node);
-      openMap.set(k, node);
+      openMap.set(nodeKey, node);
     }
   }
-
   return null;
 }
 
-/**
- * Route distance from `origin` to every tile the enemy could stand on, as one
- * breadth-first sweep.
- *
- * Candidate scoring needs "how far is this tile from the target" for every
- * reachable tile. Asking A* that question once per candidate meant dozens of
- * searches to answer what a single flood fill answers for the whole board, and
- * it was the dominant cost of an enemy's turn. Eight-way steps all cost one, so
- * breadth-first order is already shortest-path order.
- *
- * `mover` is excluded from the occupancy test: it is the unit being routed, and
- * its own tile must not block the field it is planning against.
- */
 function routeDistanceField(
   map: GameMap,
-  origin: { x: number; y: number },
+  origin: Point,
   mover: Unit,
 ): Map<string, number> {
-  const distances = new Map<string, number>();
   const key = (x: number, y: number) => `${x},${y}`;
-  distances.set(key(origin.x, origin.y), 0);
-  let frontier: { x: number; y: number }[] = [{ x: origin.x, y: origin.y }];
+  const distances = new Map<string, number>([[key(origin.x, origin.y), 0]]);
+  let frontier: Point[] = [{ ...origin }];
   let depth = 0;
   while (frontier.length > 0) {
     depth += 1;
-    const next: { x: number; y: number }[] = [];
-    for (const cur of frontier) {
-      for (const d of MOVE_DIRECTIONS) {
-        const nx = cur.x + d.x;
-        const ny = cur.y + d.y;
-        const k = key(nx, ny);
-        if (distances.has(k)) continue;
-        if (!isOpenTerrain(map, nx, ny)) continue;
-        if (!diagonalIsClear(map, cur.x, cur.y, nx, ny)) continue;
+    const next: Point[] = [];
+    for (const current of frontier) {
+      for (const direction of MOVE_DIRECTIONS) {
+        const nx = current.x + direction.x;
+        const ny = current.y + direction.y;
+        const nodeKey = key(nx, ny);
+        if (distances.has(nodeKey) || !isOpenTerrain(map, nx, ny)) continue;
+        if (!diagonalIsClear(map, current.x, current.y, nx, ny)) continue;
         const occupant = unitAt(map, nx, ny);
         if (occupant && occupant.id !== mover.id) continue;
-        distances.set(k, depth);
+        distances.set(nodeKey, depth);
         next.push({ x: nx, y: ny });
       }
     }
@@ -254,26 +217,26 @@ function routeDistanceField(
   return distances;
 }
 
-/**
- * Every tile the enemy can walk to this turn, including its current tile at
- * steps=0. Uses the same eight-way field the player's movement radius is drawn
- * from, so both sides plan against identical geometry.
- */
-function reachableTiles(
-  map: GameMap,
-  enemy: Unit,
-): Array<{ x: number; y: number; steps: number }> {
+type ReachableCandidate = Point & {
+  steps: number;
+  path: Point[];
+};
+
+function reachableTiles(map: GameMap, enemy: Unit): ReachableCandidate[] {
   const field = computeMovementField(map, enemy, movementRange(enemy));
-  return [...field.nodes.values()].map(({ x, y, steps }) => ({ x, y, steps }));
+  return [...field.nodes.values()].map(({ x, y, steps }) => ({
+    x,
+    y,
+    steps,
+    path: steps === 0 ? [] : movementPath(field, x, y),
+  }));
 }
 
 function adjacentAllyCount(map: GameMap, enemy: Unit, cx: number, cy: number): number {
   let count = 0;
-  for (const d of ORTHOGONAL_DIRECTIONS) {
-    const nx = cx + d.x;
-    const ny = cy + d.y;
-    const u = unitAt(map, nx, ny);
-    if (u && u.team === enemy.team && u.id !== enemy.id) count += 1;
+  for (const direction of ORTHOGONAL_DIRECTIONS) {
+    const unit = unitAt(map, cx + direction.x, cy + direction.y);
+    if (unit && unit.team === enemy.team && unit.id !== enemy.id) count += 1;
   }
   return count;
 }
@@ -282,52 +245,74 @@ function rangeBandForCandidate(distance: number): RangeBand {
   return rangeBandBetween({ x: 0, y: 0 }, { x: distance, y: 0 });
 }
 
-/**
- * True when some living player is holding overwatch that could take a reaction
- * shot at `enemy` where it currently stands. Callers relocate the enemy first,
- * so this reads the same geometry the reaction itself will use.
- */
-function tileIsWatched(map: GameMap, enemy: Unit): boolean {
-  for (const p of livingPlayers(map)) {
-    if (!p.overwatch) continue;
-    if (isSuppressed(p)) continue;
-    if (canShootTarget(map, p, enemy).canShoot) return true;
+type OverwatchCoverage = {
+  coveredBy: Map<string, string[]>;
+  budgets: Map<string, number>;
+};
+
+/** Build watcher visibility once, then reuse it for every candidate route. */
+function buildOverwatchCoverage(
+  map: GameMap,
+  enemy: Unit,
+  tiles: readonly Point[],
+): OverwatchCoverage {
+  const coveredBy = new Map<string, string[]>();
+  const budgets = new Map<string, number>();
+  const watchers = livingPlayers(map).filter((player) =>
+    player.overwatch &&
+    !isSuppressed(player) &&
+    (player.overwatchShotsUsed ?? 0) < overwatchReactions(player)
+  );
+  for (const watcher of watchers) {
+    budgets.set(watcher.id, overwatchReactions(watcher) - (watcher.overwatchShotsUsed ?? 0));
+    for (const tile of watchedTiles(map, watcher, enemy, tiles)) {
+      const tileKey = `${tile.x},${tile.y}`;
+      const ids = coveredBy.get(tileKey) ?? [];
+      ids.push(watcher.id);
+      coveredBy.set(tileKey, ids);
+    }
   }
-  return false;
+  return { coveredBy, budgets };
 }
 
-/** Would a step to (x,y) put `enemy` inside a player's overwatch? */
-function stepIsWatched(map: GameMap, enemy: Unit, x: number, y: number): boolean {
-  const origX = enemy.x;
-  const origY = enemy.y;
-  enemy.x = x;
-  enemy.y = y;
-  try {
-    return tileIsWatched(map, enemy);
-  } finally {
-    enemy.x = origX;
-    enemy.y = origY;
+function reactionsForPath(path: readonly Point[], coverage: OverwatchCoverage): number {
+  const remaining = new Map(coverage.budgets);
+  let reactions = 0;
+  for (const step of path) {
+    for (const watcherId of coverage.coveredBy.get(`${step.x},${step.y}`) ?? []) {
+      const left = remaining.get(watcherId) ?? 0;
+      if (left <= 0) continue;
+      reactions += 1;
+      remaining.set(watcherId, left - 1);
+    }
   }
+  return reactions;
 }
 
-/**
- * Score a candidate destination tile for `enemy` heading toward `target`.
- * Higher is better. Uses a temporarily-relocated enemy to evaluate LoS, then
- * restores the original position before returning.
- */
+/** How many actual reaction shots this path is expected to consume. */
+export function overwatchRouteReactions(
+  map: GameMap,
+  enemy: Unit,
+  path: readonly Point[],
+): number {
+  if (path.length === 0) return 0;
+  return reactionsForPath(path, buildOverwatchCoverage(map, enemy, path));
+}
+
 function scoreCandidate(
   map: GameMap,
   enemy: Unit,
   target: Unit,
-  candidate: { x: number; y: number; steps: number },
+  candidate: ReachableCandidate,
   routeDistances: Map<string, number>,
+  routeReactions: number,
 ): number {
   const origX = enemy.x;
   const origY = enemy.y;
   enemy.x = candidate.x;
   enemy.y = candidate.y;
   try {
-    let score = 0;
+    let score = routeReactions * AI_SCORE_OVERWATCH_LANE;
     const remainingAp = enemy.ap - movementApCostForTiles(enemy, candidate.steps);
     const shot = canShootTarget(map, enemy, target);
     const canFire = shot.canShoot && remainingAp >= SHOOT_AP_COST;
@@ -336,56 +321,38 @@ function scoreCandidate(
       const penalty = shotHitPenalty(map, enemy, target);
       const hitChance = penalty === Infinity ? 0 : Math.max(0, BASE_HIT - penalty);
       score += Math.round(hitChance * AI_SCORE_HIT_CHANCE);
-      if (shot.mode === "peek") {
-        score += AI_SCORE_PEEK_EXPOSURE_RISK;
-      }
-      // Going around a target's cover is worth more than the accuracy it
-      // restores, and it is the answer to a hunkered defender: hunkering only
-      // deepens cover that still faces the shooter.
-      if (exposedAgainst(map, enemy, target)) {
-        score += AI_SCORE_EXPOSES_TARGET;
-      }
+      if (shot.mode === "peek") score += AI_SCORE_PEEK_EXPOSURE_RISK;
+      if (exposedAgainst(map, enemy, target)) score += AI_SCORE_EXPOSES_TARGET;
     }
-    // Walking into ground a watcher already covers now costs the enemy, and it
-    // costs for every step of the walk rather than only for crossing a
-    // visibility threshold, because that is how overwatch now triggers.
-    if (candidate.steps > 0 && tileIsWatched(map, enemy)) {
-      score += AI_SCORE_OVERWATCH_LANE;
-    }
-    // Fight where your weapon works. Everything archetype-specific about
-    // positioning comes from this one term reading the unit's range profile,
-    // rather than from a behaviour switch per enemy type.
+
     const wanted = preferredBand(enemy.combat);
-    const distance = tileDistance({ x: candidate.x, y: candidate.y }, target);
-    if (rangeBandForCandidate(distance) === wanted) {
-      score += AI_SCORE_PREFERRED_BAND;
+    const hasRangeIdentity = rangeRating(enemy.combat, wanted) === "strong";
+    const distance = tileDistance(candidate, target);
+    if (hasRangeIdentity) {
+      if (rangeBandForCandidate(distance) === wanted) score += AI_SCORE_PREFERRED_BAND;
+      score += AI_SCORE_BAND_DRIFT * Math.abs(distance - bandTargetDistance(wanted));
     }
-    score += AI_SCORE_BAND_DRIFT * Math.abs(distance - bandTargetDistance(wanted));
+
     const coverFromTarget = targetCoverPenalty(map, target, enemy);
     const coverWeight = enemy.aiBehavior === "sentinel" || enemy.aiBehavior === "marksman"
       ? AI_SCORE_COVER * 2
       : AI_SCORE_COVER;
     if (coverFromTarget > 0) score += coverWeight;
     const distanceWeight = enemy.aiBehavior === "assault" ? -3 : AI_SCORE_DISTANCE;
-    // Read from the precomputed field rather than pathing again. Unreachable
-    // tiles keep the old heavy penalty so they stay strictly worse than any
-    // tile the enemy can actually walk to.
     const routeDistance = routeDistances.get(`${candidate.x},${candidate.y}`)
       ?? manhattan(candidate.x, candidate.y, target.x, target.y) + map.width * map.height;
     score += distanceWeight * routeDistance;
     score += AI_SCORE_ADJACENT_ALLY * adjacentAllyCount(map, enemy, candidate.x, candidate.y);
 
     let exposed = false;
-    for (const p of livingPlayers(map)) {
-      if (!hasStrictLineOfSight(map, p.x, p.y, candidate.x, candidate.y)) continue;
-      const coverFromP = targetCoverPenalty(map, p, enemy);
-      if (coverFromP === 0) {
+    for (const player of livingPlayers(map)) {
+      if (!hasStrictLineOfSight(map, player.x, player.y, candidate.x, candidate.y)) continue;
+      if (targetCoverPenalty(map, player, enemy) === 0) {
         exposed = true;
         break;
       }
     }
     if (exposed) score += AI_SCORE_EXPOSED;
-
     return score;
   } finally {
     enemy.x = origX;
@@ -393,89 +360,100 @@ function scoreCandidate(
   }
 }
 
-/**
- * Expected damage from shooting `target` right now. Reads the same preview the
- * player's HUD does, so every new modifier - Aim, Hunker, Suppressed, Exposed -
- * reaches the AI's target choice without being restated here.
- */
 function shotValue(map: GameMap, enemy: Unit, target: Unit): number {
   const preview = previewShot(map, enemy, target);
   if (!preview.shot.canShoot) return -Infinity;
   const expected = preview.hitChance * preview.damage;
-  // Finishing a wounded operator beats chipping a healthy one for the same
-  // expected damage.
   const finisher = preview.damage >= target.hp ? preview.hitChance * 2 : 0;
   return expected + finisher;
 }
 
-/** The player this enemy is currently most interested in shooting, if any. */
 function bestVisibleTarget(map: GameMap, enemy: Unit): Unit | null {
   let best: Unit | null = null;
   let bestValue = -Infinity;
-  for (const p of visiblePlayers(map, enemy)) {
-    const value = shotValue(map, enemy, p);
+  for (const player of visiblePlayers(map, enemy)) {
+    const value = shotValue(map, enemy, player);
     if (value > bestValue) {
       bestValue = value;
-      best = p;
+      best = player;
     }
   }
   return best;
 }
 
-/**
- * Decide what `enemy` is trying to do, and say so.
- *
- * This is the single source of truth for intent. The HUD renders whatever this
- * returns and `takeEnemyAction` executes against it, so the board can never
- * advertise a plan the AI did not make. It reads board state only - no
- * randomness - so inspecting an enemy never leaks a die roll; what it reveals
- * is the plan, and the plan is allowed to change when the board does.
- *
- * Archetype identity lives here rather than in a pile of scoring constants,
- * because "what is this unit trying to do" is exactly what differs between a
- * Marksman and a Scrapper.
- */
+function shouldAimBeforeShot(map: GameMap, enemy: Unit, target: Unit): boolean {
+  if (enemy.aiBehavior === "marksman") return false;
+  if (isAimed(enemy) || isSuppressed(enemy)) return false;
+  if (enemy.ap < AIM_AP_COST + SHOOT_AP_COST) return false;
+  if (!actionEligibility(map, enemy, "aim").ok) return false;
+
+  const normalValue = shotValue(map, enemy, target);
+  if (!Number.isFinite(normalValue)) return false;
+  const normalShots = Math.floor(enemy.ap / SHOOT_AP_COST);
+  const shotsAfterAim = Math.floor((enemy.ap - AIM_AP_COST) / SHOOT_AP_COST);
+  if (shotsAfterAim <= 0) return false;
+
+  const aimedMap = cloneMap(map);
+  const aimedEnemy = aimedMap.units.find((unit) => unit.id === enemy.id);
+  const aimedTarget = aimedMap.units.find((unit) => unit.id === target.id);
+  if (!aimedEnemy || !aimedTarget) return false;
+  setAimed(aimedEnemy, true);
+  const aimedValue = shotValue(aimedMap, aimedEnemy, aimedTarget);
+  const fireNowValue = normalValue * normalShots;
+  const prepareValue = aimedValue + normalValue * Math.max(0, shotsAfterAim - 1);
+  return prepareValue > fireNowValue + 0.05;
+}
+
+function marksmanLockedTarget(map: GameMap, enemy: Unit): Unit | null {
+  if (enemy.aiBehavior !== "marksman" || !isAimed(enemy)) return null;
+  if (enemy.intent?.kind !== "aim" || !enemy.intent.targetId) return null;
+  if (isSuppressed(enemy)) return null;
+  const target = map.units.find((unit) =>
+    unit.id === enemy.intent!.targetId && unit.team === "player" && unit.hp > 0
+  ) ?? null;
+  if (!target) return null;
+  return canShootTarget(map, enemy, target).canShoot ? target : null;
+}
+
+function validateMarksmanLock(map: GameMap, enemy: Unit): Unit | null {
+  if (enemy.aiBehavior !== "marksman" || !isAimed(enemy)) return null;
+  const target = marksmanLockedTarget(map, enemy);
+  if (!target) setAimed(enemy, false);
+  return target;
+}
+
 export function planEnemyIntent(map: GameMap, enemy: Unit): EnemyIntent {
   return planEnemyTurn(map, enemy).intent;
 }
 
-/**
- * A plan, and the work that produced it.
- *
- * `destination` is the scored tile the intent refers to. It is carried on the
- * plan rather than recomputed by the executor because scoring every reachable
- * tile is the expensive part of an enemy's turn, and doing it twice per action
- * doubled AI cost on large boards.
- */
+type PlannedDestination = Point & { path: Point[] };
+
 type EnemyPlan = {
   intent: EnemyIntent;
-  /** The unit the intent names, resolved and known alive. */
   target: Unit | null;
-  /** Best reachable tile, computed only when the plan involves moving. */
-  destination: { x: number; y: number } | null;
+  destination: PlannedDestination | null;
 };
+
+function movementIntentKind(enemy: Unit, target: Unit, destination: Point): "close" | "reposition" {
+  return tileDistance(destination, target) < tileDistance(enemy, target)
+    ? "close"
+    : "reposition";
+}
 
 function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
   const idle: EnemyPlan = { intent: makeIntent("idle"), target: null, destination: null };
-  if (enemy.hp <= 0) return idle;
-  if (livingPlayers(map).length === 0) return idle;
-
-  const visible = bestVisibleTarget(map, enemy);
+  if (enemy.hp <= 0 || livingPlayers(map).length === 0) return idle;
   const behavior = enemy.aiBehavior ?? "balanced";
   const wanted = preferredBand(enemy.combat);
-
   const shooting = (intent: EnemyIntent, target: Unit): EnemyPlan =>
     ({ intent, target, destination: null });
 
+  const locked = behavior === "marksman" ? marksmanLockedTarget(map, enemy) : null;
+  if (locked) return shooting(makeIntent("aim", locked.id, { x: locked.x, y: locked.y }), locked);
+
+  const visible = bestVisibleTarget(map, enemy);
   if (visible) {
     const band = rangeBandBetween(enemy, visible);
-    // A Marksman that already holds a bead is committed: that is the whole
-    // point of telegraphing it.
-    if (behavior === "marksman" && isAimed(enemy)) {
-      return shooting(makeIntent("aim", visible.id, { x: visible.x, y: visible.y }), visible);
-    }
-    // It settles on a target one turn before firing, so the player gets a turn
-    // to break the plan. Only worth doing from a lane it actually likes.
     if (
       behavior === "marksman" &&
       band === wanted &&
@@ -484,7 +462,6 @@ function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
     ) {
       return shooting(makeIntent("aim", visible.id, { x: visible.x, y: visible.y }), visible);
     }
-    // A Sentinel would rather pin a dangerous operator than trade with it.
     if (
       behavior === "sentinel" &&
       enemy.ap >= SUPPRESS_AP_COST &&
@@ -493,20 +470,34 @@ function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
     ) {
       return shooting(makeIntent("suppress", visible.id, { x: visible.x, y: visible.y }), visible);
     }
+    if (
+      band !== wanted &&
+      rangeRating(enemy.combat, wanted) === "strong" &&
+      movementRange(enemy) > 0
+    ) {
+      const destination = bestRangeDestination(map, enemy, visible);
+      if (destination) {
+        return {
+          intent: makeIntent(
+            movementIntentKind(enemy, visible, destination),
+            visible.id,
+            { x: destination.x, y: destination.y },
+          ),
+          target: visible,
+          destination,
+        };
+      }
+    }
     if (enemy.ap >= SHOOT_AP_COST) {
       return shooting(makeIntent("engage", visible.id, { x: visible.x, y: visible.y }), visible);
     }
   }
 
-  // Nothing to shoot right now, so the plan is about ground. Only now is the
-  // route-nearest operator worth searching for: the shooting branches above
-  // return without ever needing it, and that search is not cheap.
   const anchor = closestPlayer(map, enemy);
   if (!anchor) return idle;
   const destination = bestDestination(map, enemy, anchor);
   const holding = destination === null ||
     (destination.x === enemy.x && destination.y === enemy.y);
-
   if (holding) {
     if (
       behavior === "sentinel" &&
@@ -526,54 +517,102 @@ function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
       destination,
     };
   }
-
-  // Moving to reach its band reads as closing; moving while already in band
-  // reads as looking for an angle.
-  const bandNow = rangeBandBetween(enemy, anchor);
-  const kind = bandNow === wanted ? "reposition" : "close";
   return {
-    intent: makeIntent(kind, anchor.id, destination),
+    intent: makeIntent(
+      movementIntentKind(enemy, anchor, destination),
+      anchor.id,
+      { x: destination.x, y: destination.y },
+    ),
     target: anchor,
     destination,
   };
 }
 
-/** Is pinning this operator worth more than shooting it? */
 function shouldSuppress(map: GameMap, enemy: Unit, target: Unit): boolean {
   if (isSuppressed(target)) return false;
-  // Pinning a watcher clears the lane; pinning a dug-in target that shrugs off
-  // ordinary fire is better than feeding it more of that fire.
   if (target.overwatch) return true;
   const preview = previewShot(map, enemy, target);
   return preview.shot.canShoot && preview.hitChance < 0.5;
 }
 
-/** Highest-scoring reachable tile for this enemy, or null when it cannot move. */
-function bestDestination(
+/**
+ * Find a move that strictly improves a range-specialized unit's distance from
+ * its target without crossing reaction fire. If every better band position is
+ * watched, taking the current shot is the safer tactical choice.
+ */
+function bestRangeDestination(
   map: GameMap,
   enemy: Unit,
   target: Unit,
-): { x: number; y: number } | null {
-  // One sweep out from the target answers the distance question for every
-  // candidate at once.
+): PlannedDestination | null {
+  const wanted = preferredBand(enemy.combat);
+  const idealDistance = bandTargetDistance(wanted);
+  const currentGap = Math.abs(tileDistance(enemy, target) - idealDistance);
+  const candidates = reachableTiles(map, enemy).filter((candidate) =>
+    candidate.steps > 0 &&
+    Math.abs(tileDistance(candidate, target) - idealDistance) < currentGap
+  );
+  if (candidates.length === 0) return null;
+
   const routeDistances = routeDistanceField(map, target, enemy);
-  let best: { x: number; y: number } | null = null;
+  const coverage = buildOverwatchCoverage(map, enemy, candidates);
+  let best: PlannedDestination | null = null;
   let bestScore = -Infinity;
-  for (const c of reachableTiles(map, enemy)) {
-    const s = scoreCandidate(map, enemy, target, c, routeDistances);
-    if (s > bestScore) {
-      bestScore = s;
-      best = { x: c.x, y: c.y };
+  for (const candidate of candidates) {
+    const routeReactions = reactionsForPath(candidate.path, coverage);
+    if (routeReactions > 0) continue;
+    const score = scoreCandidate(
+      map,
+      enemy,
+      target,
+      candidate,
+      routeDistances,
+      routeReactions,
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      best = { x: candidate.x, y: candidate.y, path: candidate.path };
     }
   }
   return best;
 }
 
-/**
- * Refresh every living enemy's published plan. Called when the player's turn
- * begins and whenever the board changes enough that a stale plan would be
- * misleading, so what the player reads is always current.
- */
+function bestDestination(
+  map: GameMap,
+  enemy: Unit,
+  target: Unit,
+): PlannedDestination | null {
+  const routeDistances = routeDistanceField(map, target, enemy);
+  const candidates = reachableTiles(map, enemy);
+  const coverage = buildOverwatchCoverage(map, enemy, candidates);
+  let best: PlannedDestination | null = null;
+  let bestScore = -Infinity;
+  for (const candidate of candidates) {
+    const score = scoreCandidate(
+      map,
+      enemy,
+      target,
+      candidate,
+      routeDistances,
+      reactionsForPath(candidate.path, coverage),
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      best = { x: candidate.x, y: candidate.y, path: candidate.path };
+    }
+  }
+  return best;
+}
+
+function forecastEnemyIntent(map: GameMap, enemy: Unit): EnemyIntent {
+  const forecastMap = cloneMap(map);
+  const forecastEnemy = forecastMap.units.find((unit) => unit.id === enemy.id);
+  if (!forecastEnemy) return makeIntent("idle");
+  beginUnitTurn(forecastEnemy);
+  validateMarksmanLock(forecastMap, forecastEnemy);
+  return planEnemyIntent(forecastMap, forecastEnemy);
+}
+
 export function refreshEnemyIntents(map: GameMap): void {
   for (const unit of map.units) {
     if (unit.team !== "enemy") continue;
@@ -581,7 +620,8 @@ export function refreshEnemyIntents(map: GameMap): void {
       unit.intent = undefined;
       continue;
     }
-    unit.intent = planEnemyIntent(map, unit);
+    validateMarksmanLock(map, unit);
+    unit.intent = forecastEnemyIntent(map, unit);
   }
 }
 
@@ -591,19 +631,14 @@ export function beginEnemyTurn(
   session: AiSession,
 ): void {
   enemy.peekExposure = null;
-  // Replan at the top of the turn: the player has had a whole turn to
-  // invalidate whatever was published, and the enemy acts on the current plan,
-  // not the advertised one.
+  validateMarksmanLock(map, enemy);
   enemy.intent = planEnemyIntent(map, enemy);
   const target = enemy.intent.targetId
-    ? map.units.find((u) => u.id === enemy.intent!.targetId && u.hp > 0) ?? null
+    ? map.units.find((unit) => unit.id === enemy.intent!.targetId && unit.hp > 0) ?? null
     : null;
   const anchor = target ?? closestPlayer(map, enemy);
-  if (anchor) {
-    session.turnTargets.set(enemy.id, anchor.id);
-  } else {
-    session.turnTargets.delete(enemy.id);
-  }
+  if (anchor) session.turnTargets.set(enemy.id, anchor.id);
+  else session.turnTargets.delete(enemy.id);
 }
 
 export function takeEnemyAction(
@@ -615,23 +650,18 @@ export function takeEnemyAction(
   if (enemy.hp <= 0) return { kind: "wait" };
   if (enemy.ap <= 0 && movementRange(enemy) <= 0) return { kind: "wait" };
 
-  // Replan before acting. The board may have moved since the plan was
-  // published - the player's whole turn happened in between - so the enemy
-  // acts on what is true now. This is the same function that produced the
-  // intent the player read, so a changed plan is a changed situation rather
-  // than the AI ignoring its own advertisement.
   const plan = planEnemyTurn(map, enemy);
   const intent = plan.intent;
   enemy.intent = intent;
   const intentTarget = plan.target;
 
-  // A Marksman that has settled on a target holds the bead instead of firing,
-  // giving the player one turn to break it.
   if (intent.kind === "aim" && intentTarget && !isAimed(enemy)) {
     const outcome = performAction(map, enemy, "aim");
-    if (outcome.ok) return { kind: "aim", target: intentTarget };
+    if (outcome.ok) {
+      enemy.ap = 0;
+      return { kind: "aim", target: intentTarget };
+    }
   }
-
   if (intent.kind === "suppress" && intentTarget) {
     const outcome = performAction(map, enemy, "suppress", intentTarget, rng);
     if (outcome.ok) return { kind: "suppress", target: intentTarget };
@@ -640,39 +670,45 @@ export function takeEnemyAction(
   let target: Unit | null = intentTarget;
   if (!target) {
     const targetId = session.turnTargets.get(enemy.id);
-    if (targetId) {
-      target = map.units.find((u) => u.id === targetId && u.hp > 0) ?? null;
-    }
+    if (targetId) target = map.units.find((unit) => unit.id === targetId && unit.hp > 0) ?? null;
   }
-  if (!target) {
-    target = closestPlayer(map, enemy);
-  }
+  if (!target) target = closestPlayer(map, enemy);
   if (!target) return { kind: "wait" };
   session.turnTargets.set(enemy.id, target.id);
 
-  // Re-check shoot now using current LoS and current AP.
-  if (enemy.ap >= SHOOT_AP_COST) {
+  if (enemy.aiBehavior === "marksman" && isAimed(enemy)) {
+    const locked = marksmanLockedTarget(map, enemy);
+    if (!locked || enemy.ap < SHOOT_AP_COST) return { kind: "wait" };
+    enemy.ap -= SHOOT_AP_COST;
+    const result = resolveShot(map, enemy, locked, rng);
+    if (!result.canShoot) {
+      enemy.ap += SHOOT_AP_COST;
+      setAimed(enemy, false);
+      return { kind: "wait" };
+    }
+    enemy.ap = 0;
+    session.turnTargets.set(enemy.id, locked.id);
+    return { kind: "shoot", target: locked, result };
+  }
+
+  if (intent.kind === "engage" && enemy.ap >= SHOOT_AP_COST) {
     const visible = visiblePlayers(map, enemy);
     if (visible.length > 0) {
-      // Prefer the persisted target if it's still visible; otherwise pick the
-      // visible player the shot is actually worth taking against. Expected
-      // damage rather than raw accuracy, so a hunkered defender behind a wall
-      // stops soaking fire that a flanked squadmate would take much harder.
       let best = visible.includes(target) ? target : visible[0];
       let bestValue = shotValue(map, enemy, best);
-      for (const p of visible) {
-        if (p === best) continue;
-        const value = shotValue(map, enemy, p);
+      for (const player of visible) {
+        if (player === best) continue;
+        const value = shotValue(map, enemy, player);
         if (value > bestValue) {
           bestValue = value;
-          best = p;
+          best = player;
         }
       }
+      if (shouldAimBeforeShot(map, enemy, best)) performAction(map, enemy, "aim");
+      if (enemy.ap < SHOOT_AP_COST) return { kind: "wait" };
       enemy.ap -= SHOOT_AP_COST;
       const result = resolveShot(map, enemy, best, rng);
       if (!result.canShoot) {
-        // Geometry changed between target selection and resolution. Refuse to
-        // emit a shot through blocked terrain and restore the spent AP.
         enemy.ap += SHOOT_AP_COST;
         return { kind: "wait" };
       }
@@ -680,17 +716,10 @@ export function takeEnemyAction(
     }
   }
 
-  // No shot now: walk toward the tile the plan already chose. Scoring every
-  // reachable tile is the expensive half of an enemy's turn, so it happens
-  // once, inside the planner, and the executor reads the answer.
   const bestCandidate = plan.destination ?? bestDestination(map, enemy, target);
-
   const holdingPosition = bestCandidate !== null &&
-    bestCandidate.x === enemy.x &&
-    bestCandidate.y === enemy.y;
+    bestCandidate.x === enemy.x && bestCandidate.y === enemy.y;
 
-  // Overwatch is now a fixed 2 AP commitment that leaves the rest of the turn
-  // intact, so a sentinel that sets one is no longer spending its whole turn.
   if (
     enemy.aiBehavior === "sentinel" &&
     holdingPosition &&
@@ -701,61 +730,53 @@ export function takeEnemyAction(
     const outcome = performAction(map, enemy, "overwatch");
     if (outcome.ok) return { kind: "overwatch" };
   }
-
-  // A defender that is going nowhere, is being looked at, and has terrain to
-  // press into should use it. Deliberately narrow: this is the AI knowing what
-  // Hunker is for, not the AI acquiring a full action repertoire.
   if (
     holdingPosition &&
     (enemy.aiBehavior === "sentinel" || enemy.aiBehavior === "marksman") &&
     !isHunkered(enemy) &&
     enemy.ap >= HUNKER_AP_COST &&
     hasAdjacentCover(map, enemy.x, enemy.y) &&
-    livingPlayers(map).some((p) => canShootTarget(map, p, enemy).canShoot)
+    livingPlayers(map).some((player) => canShootTarget(map, player, enemy).canShoot)
   ) {
     const outcome = performAction(map, enemy, "hunker");
     if (outcome.ok) return { kind: "hunker" };
   }
 
-  // A unit that has committed to watching a lane stays on it. Without this the
-  // fallback route below would walk a sentinel straight off the position it
-  // just spent two action points to hold.
+  if (intent.kind === "hold") return { kind: "wait" };
   if (holdingPosition && enemy.overwatch) return { kind: "wait" };
 
-  // If the best candidate is the current tile, fall back to A* toward an open
-  // tile adjacent to the target (never the target's own tile).
-  let stepTarget: { x: number; y: number } | null = bestCandidate;
-  let plannedStep: { x: number; y: number } | null = null;
+  let stepTarget: Point | null = bestCandidate;
+  let plannedStep: Point | null = bestCandidate?.path[0] ?? null;
   if (!stepTarget || (stepTarget.x === enemy.x && stepTarget.y === enemy.y)) {
     const adjacents = MOVE_DIRECTIONS
-      .map((d) => ({ x: target.x + d.x, y: target.y + d.y }))
-      .filter((p) => isPassable(map, p.x, p.y));
+      .map((direction) => ({ x: target.x + direction.x, y: target.y + direction.y }))
+      .filter((point) => isPassable(map, point.x, point.y));
     let bestRoute: AStarRoute | null = null;
-    let bestWatched = true;
-    for (const a of adjacents) {
-      const route = aStarRoute(map, enemy.x, enemy.y, a.x, a.y);
+    let bestRisk = Infinity;
+    for (const adjacent of adjacents) {
+      const route = aStarRoute(map, enemy.x, enemy.y, adjacent.x, adjacent.y);
       if (!route) continue;
-      // Prefer any approach whose first step stays out of a watched lane; only
-      // accept a watched opening when every route starts inside one, so the
-      // squad advances instead of freezing in front of a single watcher.
-      const watched = stepIsWatched(map, enemy, route.next.x, route.next.y);
+      const risk = overwatchRouteReactions(
+        map,
+        enemy,
+        route.path.slice(0, movementRange(enemy)),
+      );
       const better = bestRoute === null ||
-        (bestWatched && !watched) ||
-        (bestWatched === watched && route.distance < bestRoute.distance);
+        risk < bestRisk ||
+        (risk === bestRisk && route.distance < bestRoute.distance);
       if (better) {
         bestRoute = route;
-        bestWatched = watched;
+        bestRisk = risk;
       }
     }
     if (!bestRoute) return { kind: "wait" };
     plannedStep = bestRoute.next;
-    stepTarget = { x: plannedStep.x, y: plannedStep.y };
+    stepTarget = plannedStep;
   }
 
   if (!stepTarget || (stepTarget.x === enemy.x && stepTarget.y === enemy.y)) {
     return { kind: "wait" };
   }
-
   const step = plannedStep ?? aStarRoute(
     map,
     enemy.x,
@@ -763,10 +784,9 @@ export function takeEnemyAction(
     stepTarget.x,
     stepTarget.y,
   )?.next;
-  if (!step) return { kind: "wait" };
-  if (!canStep(map, enemy, enemy.x, enemy.y, step.x, step.y)) return { kind: "wait" };
-  // A tile of travel only bills an action point every other step, so an enemy
-  // covers the same doubled distance a player does.
+  if (!step || !canStep(map, enemy, enemy.x, enemy.y, step.x, step.y)) {
+    return { kind: "wait" };
+  }
   const stepCost = movementApCost(enemy);
   if (enemy.ap < stepCost) return { kind: "wait" };
 

@@ -4,6 +4,7 @@ import {
   buildCombatProfile,
   getUpgrade,
   isUpgradeId,
+  maxApWithUpgrades,
   recoveryHealing,
   postCombatHealing,
   stackCount,
@@ -17,7 +18,7 @@ import {
 } from "./generation.ts";
 import { cloneMap, type GameMap } from "./map.ts";
 import { SeededRng } from "./rng.ts";
-import { sanitizeLoadedMap } from "./validation.ts";
+import { sanitizeLoadedMap, validateMap } from "./validation.ts";
 
 export const RUN_SAVE_VERSION = 1;
 export const RUN_STORAGE_KEY = "circuit-bored.run.v1";
@@ -64,6 +65,14 @@ export type RunState = {
   activeEncounter: ActiveEncounter | null;
   stats: RunStats;
 };
+
+type EncounterRngSession = {
+  rng: SeededRng;
+  /** Persistent state this private cursor was forked from or last committed to. */
+  committedState: number;
+};
+
+const encounterRngSessions = new WeakMap<RunState, EncounterRngSession>();
 
 const nodeText: Record<RouteNodeKind, { title: string; description: string }> = {
   combat: { title: "Contact", description: "Standard tactical engagement." },
@@ -145,15 +154,86 @@ export function currentNode(run: RunState): RouteNode | null {
   return run.route.flat().find((node) => node.id === run.currentNodeId) ?? null;
 }
 
+/** Tactical circuits tied to a role should disappear when nobody can use them. */
+const ROLE_UPGRADE_REQUIREMENTS: Partial<
+  Record<UpgradeId, EncounterSquadMember["archetypeId"]>
+> = {
+  target_designator: "operator",
+  sprint_servos: "runner",
+  shield_projector: "bulwark",
+};
+
+function hasFutureRouteNode(run: RunState, kind: RouteNodeKind): boolean {
+  // Rewards are rolled after the current depth's node has already been chosen.
+  // The unchosen sibling at this same depth is no longer reachable, so only
+  // later depth layers can consume a future-only upgrade.
+  return run.route
+    .slice(run.depth + 1)
+    .some((layer) => layer.some((node) => node.kind === kind));
+}
+
+function upgradeHasFutureConsumer(run: RunState, id: UpgradeId): boolean {
+  const required = ROLE_UPGRADE_REQUIREMENTS[id];
+  if (
+    required &&
+    !run.squad.some((member) => member.archetypeId === required && member.hp > 0)
+  ) {
+    return false;
+  }
+  if (id === "triage_protocol" && !hasFutureRouteNode(run, "recovery")) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Lightly bias a reward toward the build the player has already begun without
+ * turning a seeded roguelike into a deterministic shopping list. Existing
+ * stacks and tags are useful signals that a circuit participates in an actual
+ * plan; the seeded shuffle remains the tie-break, so different runs still
+ * surface different combinations.
+ */
+function rewardContextScore(run: RunState, id: UpgradeId): number {
+  const candidate = getUpgrade(id);
+  let score = stackCount(run.upgrades, id) > 0 ? 2 : 0;
+  for (const installedId of run.upgrades) {
+    if (getUpgrade(installedId).tag === candidate.tag) score += 1;
+  }
+  // Tactical actions are the systems that make positioning alter the fight,
+  // so they receive a small nudge rather than competing only on flat stats.
+  if (candidate.tag === "tactic") score += 1;
+  return score;
+}
+
 function generateRewards(run: RunState, count: number): UpgradeId[] {
   const eligible = UPGRADES.filter(
-    (upgrade) => stackCount(run.upgrades, upgrade.id) < upgrade.maxStacks,
+    (upgrade) =>
+      stackCount(run.upgrades, upgrade.id) < upgrade.maxStacks &&
+      upgradeHasFutureConsumer(run, upgrade.id),
   );
   if (eligible.length === 0) return [];
+
   const rng = new SeededRng(run.rngState);
-  const rewards = rng.shuffle(eligible).slice(0, Math.min(count, eligible.length)).map((upgrade) => upgrade.id);
+  const ranked = rng.shuffle(eligible)
+    .map((upgrade, tieBreak) => ({
+      upgrade,
+      tieBreak,
+      score: rewardContextScore(run, upgrade.id),
+    }))
+    .sort((a, b) => b.score - a.score || a.tieBreak - b.tieBreak)
+    .map(({ upgrade }) => upgrade);
+
+  const selected: typeof ranked = [];
+  const tactical = ranked.find((upgrade) => upgrade.tag === "tactic");
+  if (tactical && count > 0) selected.push(tactical);
+  for (const upgrade of ranked) {
+    if (selected.includes(upgrade)) continue;
+    selected.push(upgrade);
+    if (selected.length >= Math.min(count, eligible.length)) break;
+  }
+
   run.rngState = rng.snapshot().state;
-  return rewards;
+  return selected.map((upgrade) => upgrade.id);
 }
 
 export function enterNode(run: RunState, nodeId: string): void {
@@ -174,14 +254,83 @@ export function enterNode(run: RunState, nodeId: string): void {
   const rng = new SeededRng(run.rngState);
   const map = generateEncounter(rng, node.depth, node.kind, run.squad, run.upgrades);
   run.rngState = rng.snapshot().state;
+  encounterRngSessions.delete(run);
   run.activeEncounter = { nodeId: node.id, kind: node.kind, map, turn: "player" };
   run.status = "encounter";
 }
 
+/**
+ * Serialize with sorted keys, so only values decide equality.
+ *
+ * The two snapshots compared below are built by different literals: one side is
+ * a `cloneMap` of the live board, the other is the object `sanitizeLoadedMap`
+ * assembled while opening the save. Those literals list their fields in
+ * different orders, so plain `JSON.stringify` reported a reloaded encounter as
+ * different from itself and the rollback below silently never fired.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(",")}}`;
+}
+
+function mapSnapshotsEqual(a: GameMap, b: GameMap): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
+function encounterRngSession(run: RunState): EncounterRngSession {
+  const existing = encounterRngSessions.get(run);
+  if (existing && existing.committedState === run.rngState) return existing;
+  const created = { rng: new SeededRng(run.rngState), committedState: run.rngState };
+  encounterRngSessions.set(run, created);
+  return created;
+}
+
+/**
+ * Commit pending combat randomness only when the matching battlefield snapshot
+ * also commits. A freshly mounted runtime immediately reports its source map;
+ * if the previous runtime was cancelled mid-animation, that identical report
+ * discards abandoned random draws instead of resurrecting them on resume.
+ */
+function settleEncounterRandomness(run: RunState, map: GameMap, turn: EncounterTurn): void {
+  const active = run.activeEncounter;
+  const session = encounterRngSessions.get(run);
+  if (!active || !session) return;
+  const staged = session.rng.snapshot().state;
+  if (staged === run.rngState) return;
+  if (turn === active.turn && mapSnapshotsEqual(map, active.map)) {
+    session.rng = new SeededRng(run.rngState);
+    session.committedState = run.rngState;
+    return;
+  }
+  run.rngState = staged;
+  session.committedState = staged;
+}
+
+/**
+ * Commit a runtime snapshot. Player actions remain individually durable, but
+ * an enemy phase is one transaction: its start is saved, intermediate hostile
+ * actions are deliberately ignored, and the whole resulting board + RNG cursor
+ * commit when control returns to the player. Closing the app mid-phase therefore
+ * replays that phase from the same board with the same random sequence instead
+ * of resuming from a half-scheduled state.
+ */
 export function updateActiveEncounter(run: RunState, map: GameMap, turn: EncounterTurn): void {
   if (!run.activeEncounter || run.status !== "encounter") return;
-  run.activeEncounter.map = cloneMap(map);
-  run.activeEncounter.turn = turn;
+  const active = run.activeEncounter;
+  if (active.turn === "enemy" && turn === "enemy") {
+    // The first notification from a resumed runtime is byte-for-byte the saved
+    // phase start. Use it to roll back any abandoned in-memory RNG cursor, but
+    // never commit an intermediate enemy action.
+    if (mapSnapshotsEqual(map, active.map)) settleEncounterRandomness(run, map, turn);
+    return;
+  }
+  settleEncounterRandomness(run, map, turn);
+  active.map = cloneMap(map);
+  active.turn = turn;
 }
 
 function syncSquad(run: RunState, map: GameMap): void {
@@ -199,6 +348,7 @@ function finishNode(run: RunState): void {
   run.currentNodeId = null;
   run.pendingRewards = [];
   run.activeEncounter = null;
+  encounterRngSessions.delete(run);
   run.depth += 1;
   run.status = run.depth >= run.route.length ? "victory" : "route";
 }
@@ -208,6 +358,7 @@ export function completeEncounter(run: RunState, outcome: "victory" | "defeat", 
   if (!node || !run.activeEncounter) throw new Error("No active encounter to complete");
   syncSquad(run, map);
   run.activeEncounter = null;
+  encounterRngSessions.delete(run);
   if (outcome === "defeat" || run.squad.every((member) => member.hp <= 0)) {
     run.status = "defeat";
     return;
@@ -261,10 +412,15 @@ export function chooseRecovery(run: RunState, memberId: string): void {
 }
 
 export function nextRandom(run: RunState): number {
-  const rng = new SeededRng(run.rngState);
-  const value = rng.next();
-  run.rngState = rng.snapshot().state;
-  return value;
+  // Outside combat there is no animation boundary, so random state can commit
+  // immediately. Encounter rolls use a private cursor until the board commits.
+  if (run.status !== "encounter" || !run.activeEncounter) {
+    const rng = new SeededRng(run.rngState);
+    const value = rng.next();
+    run.rngState = rng.snapshot().state;
+    return value;
+  }
+  return encounterRngSession(run).rng.next();
 }
 
 export function saveRun(run: RunState): boolean {
@@ -324,70 +480,187 @@ function sanitizeUpgrades(value: unknown): UpgradeId[] | null {
   return out;
 }
 
+function canonicalPlayerMaxAp(
+  member: EncounterSquadMember,
+  upgrades: readonly UpgradeId[],
+): number {
+  return maxApWithUpgrades(member.baseMaxAp, upgrades);
+}
+
+function activeMapStructureIsValid(rawMap: unknown): rawMap is GameMap {
+  if (!isObject(rawMap) || !Array.isArray(rawMap.tiles) || !Array.isArray(rawMap.units)) return false;
+  const candidate = rawMap as unknown as GameMap;
+  const report = validateMap(candidate);
+  const livingPlayers = candidate.units.filter((unit) =>
+    isObject(unit) && unit.team === "player" && typeof unit.hp === "number" && unit.hp > 0
+  ).length;
+  const livingEnemies = candidate.units.filter((unit) =>
+    isObject(unit) && unit.team === "enemy" && typeof unit.hp === "number" && unit.hp > 0
+  ).length;
+  // A side being wiped out is a legitimate terminal board: the killing blow can
+  // be saved before its completion overlay is acknowledged. Each side is judged
+  // on its own, so a board where both sides are down still opens instead of
+  // discarding the run at the very moment it ended.
+  const terminalPlayerDefeat = livingPlayers === 0;
+  const terminalEnemyDefeat = livingEnemies === 0;
+  return !report.issues.some((issue) => {
+    if (issue.severity !== "error") return false;
+    if (issue.code === "NO_PLAYER_SPAWN" && terminalPlayerDefeat) return false;
+    if (issue.code === "NO_ENEMY_SPAWN" && terminalEnemyDefeat) return false;
+    return true;
+  });
+}
+
+function activeStatusesAreSemanticallyValid(map: GameMap): boolean {
+  for (const unit of map.units) {
+    const statuses = unit.statuses;
+    if (statuses) {
+      if (!statuses.dashing && statuses.overwatchEvasion > 0) return false;
+      if (statuses.dashing && unit.archetypeId !== "runner") return false;
+      if (statuses.braced && unit.archetypeId !== "bulwark") return false;
+      if (statuses.guardedBy) {
+        const guardian = map.units.find((candidate) => candidate.id === statuses.guardedBy);
+        if (!guardian || guardian.id === unit.id || guardian.team !== unit.team || guardian.archetypeId !== "bulwark") {
+          return false;
+        }
+      }
+      if (statuses.markedBy) {
+        const marker = map.units.find((candidate) => candidate.id === statuses.markedBy);
+        if (!marker || marker.team === unit.team || marker.archetypeId !== "operator") return false;
+      }
+    }
+    if ((unit.relaysThisTurn ?? 0) > 0 && unit.archetypeId !== "operator") return false;
+    if ((unit.relaysThisTurn ?? 0) > 1 || (unit.flankRefundsThisTurn ?? 0) > 1) return false;
+    const reactionLimit = 1 + Math.max(0, unit.combat?.extraOverwatchReactions ?? 0);
+    if ((unit.overwatchShotsUsed ?? 0) > reactionLimit) return false;
+    if (unit.overwatch && (unit.overwatchShotsUsed ?? 0) >= reactionLimit) return false;
+  }
+  return true;
+}
+
 function rehydrateMap(
   rawMap: unknown,
   squad: readonly EncounterSquadMember[],
   upgrades: readonly UpgradeId[],
 ): GameMap | null {
+  // Editor-map loading remains deliberately forgiving. An active encounter is
+  // historical state, so repairing it would silently rewrite the run instead.
+  if (!activeMapStructureIsValid(rawMap)) return null;
   const sanitized = sanitizeLoadedMap(rawMap);
   if (!sanitized.map) return null;
   const sourceUnits = isObject(rawMap) && Array.isArray(rawMap.units) ? rawMap.units : [];
+
+  // Every operator alive when this node was entered remains represented even
+  // after dying inside it. Operators lost before the encounter are absent.
+  const expectedPlayers = new Set(squad.filter((member) => member.hp > 0).map((member) => member.id));
+  const actualPlayers = sanitized.map.units.filter((unit) => unit.team === "player");
+  if (actualPlayers.length !== expectedPlayers.size || actualPlayers.some((unit) => !expectedPlayers.has(unit.id))) {
+    return null;
+  }
+
+  const readCounter = (
+    rawUnit: Record<string, unknown>,
+    key:
+      | "movesThisTurn"
+      | "shotsThisTurn"
+      | "killsThisTurn"
+      | "encounterShots"
+      | "overwatchShotsUsed"
+      | "relaysThisTurn"
+      | "flankRefundsThisTurn",
+  ): number | null => {
+    if (rawUnit[key] === undefined) return 0;
+    const value = rawUnit[key];
+    return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1000
+      ? value as number
+      : null;
+  };
+
   for (const unit of sanitized.map.units) {
     const rawUnit = sourceUnits.find((candidate) => isObject(candidate) && candidate.id === unit.id);
+    if (!rawUnit || !isObject(rawUnit)) return null;
+    if (rawUnit.resolvingOverwatch !== undefined && rawUnit.resolvingOverwatch !== false) return null;
+
     if (unit.team === "player") {
       const member = squad.find((candidate) => candidate.id === unit.id);
       if (!member) return null;
+      const canonicalMaxAp = canonicalPlayerMaxAp(member, upgrades);
+      if (unit.hp > member.maxHp || unit.ap > canonicalMaxAp) return null;
+      unit.maxHp = member.maxHp;
+      unit.maxAp = canonicalMaxAp;
       unit.archetypeId = member.archetypeId;
       unit.displayName = member.name;
       unit.aiBehavior = UNIT_ARCHETYPES[member.archetypeId].behavior;
       unit.combat = buildCombatProfile(member.archetypeId, upgrades);
     } else {
-      const requested = isObject(rawUnit) && typeof rawUnit.archetypeId === "string"
-        ? rawUnit.archetypeId as UnitArchetypeId
-        : "rifleman";
-      const archetypeId = UNIT_ARCHETYPES[requested]?.team === "enemy" ? requested : "rifleman";
+      const requested = rawUnit.archetypeId;
+      let archetypeId: UnitArchetypeId;
+      if (requested === undefined) {
+        // Early v1 saves predate enemy archetypes. Rifleman is the old generic
+        // 8 HP / 4 AP baseline, so absence remains compatible without turning
+        // malformed new metadata into a different enemy.
+        archetypeId = "rifleman";
+      } else if (
+        typeof requested === "string" &&
+        UNIT_ARCHETYPES[requested as UnitArchetypeId]?.team === "enemy"
+      ) {
+        archetypeId = requested as UnitArchetypeId;
+      } else {
+        return null;
+      }
+      const archetype = UNIT_ARCHETYPES[archetypeId];
+      if (unit.hp > archetype.maxHp || unit.ap > archetype.maxAp) return null;
+      unit.maxHp = archetype.maxHp;
+      unit.maxAp = archetype.maxAp;
       unit.archetypeId = archetypeId;
-      unit.displayName = UNIT_ARCHETYPES[archetypeId].name;
-      unit.aiBehavior = UNIT_ARCHETYPES[archetypeId].behavior;
+      unit.displayName = archetype.name;
+      unit.aiBehavior = archetype.behavior;
       unit.combat = buildCombatProfile(archetypeId);
     }
-    const counter = (
-      key:
-        | "movesThisTurn"
-        | "shotsThisTurn"
-        | "killsThisTurn"
-        | "encounterShots"
-        | "overwatchShotsUsed"
-        | "relaysThisTurn"
-        | "flankRefundsThisTurn",
-    ) => {
-      const value = isObject(rawUnit) ? rawUnit[key] : 0;
-      return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 1000 ? value as number : 0;
+
+    const counters = {
+      movesThisTurn: readCounter(rawUnit, "movesThisTurn"),
+      shotsThisTurn: readCounter(rawUnit, "shotsThisTurn"),
+      killsThisTurn: readCounter(rawUnit, "killsThisTurn"),
+      encounterShots: readCounter(rawUnit, "encounterShots"),
+      overwatchShotsUsed: readCounter(rawUnit, "overwatchShotsUsed"),
+      relaysThisTurn: readCounter(rawUnit, "relaysThisTurn"),
+      flankRefundsThisTurn: readCounter(rawUnit, "flankRefundsThisTurn"),
     };
-    unit.movesThisTurn = counter("movesThisTurn");
-    unit.shotsThisTurn = counter("shotsThisTurn");
-    unit.killsThisTurn = counter("killsThisTurn");
-    unit.encounterShots = counter("encounterShots");
+    if (Object.values(counters).some((value) => value === null)) return null;
+    unit.movesThisTurn = counters.movesThisTurn!;
+    unit.shotsThisTurn = counters.shotsThisTurn!;
+    unit.killsThisTurn = counters.killsThisTurn!;
+    unit.encounterShots = counters.encounterShots!;
     unit.resolvingOverwatch = false;
-    unit.overwatchShotsUsed = counter("overwatchShotsUsed");
-    unit.relaysThisTurn = counter("relaysThisTurn");
-    unit.flankRefundsThisTurn = counter("flankRefundsThisTurn");
-    if (isObject(rawUnit) && isObject(rawUnit.peekExposure)) {
-      const px = rawUnit.peekExposure.x;
-      const py = rawUnit.peekExposure.y;
+    unit.overwatchShotsUsed = counters.overwatchShotsUsed!;
+    unit.relaysThisTurn = counters.relaysThisTurn!;
+    unit.flankRefundsThisTurn = counters.flankRefundsThisTurn!;
+
+    const exposure = rawUnit.peekExposure;
+    if (exposure === undefined || exposure === null) {
+      unit.peekExposure = null;
+    } else if (isObject(exposure)) {
+      const px = exposure.x;
+      const py = exposure.y;
       if (
-        Number.isInteger(px) && Number.isInteger(py) &&
-        (px as number) >= 0 && (py as number) >= 0 &&
-        (px as number) < sanitized.map.width && (py as number) < sanitized.map.height &&
-        Math.abs((px as number) - unit.x) <= 1 &&
-        Math.abs((py as number) - unit.y) <= 1 &&
-        (px !== unit.x || py !== unit.y)
+        !Number.isInteger(px) || !Number.isInteger(py) ||
+        (px as number) < 0 || (py as number) < 0 ||
+        (px as number) >= sanitized.map.width || (py as number) >= sanitized.map.height ||
+        Math.abs((px as number) - unit.x) > 1 ||
+        Math.abs((py as number) - unit.y) > 1 ||
+        (px === unit.x && py === unit.y) ||
+        sanitized.map.tiles[(py as number) * sanitized.map.width + (px as number)] !== "floor"
       ) {
-        unit.peekExposure = { x: px as number, y: py as number };
+        return null;
       }
+      unit.peekExposure = { x: px as number, y: py as number };
+    } else {
+      return null;
     }
   }
-  return sanitized.map;
+
+  return activeStatusesAreSemanticallyValid(sanitized.map) ? sanitized.map : null;
 }
 
 export function loadRunWithReport(): RunLoadResult {
@@ -463,15 +736,18 @@ export function loadRunWithReport(): RunLoadResult {
       return { run: null, error: "The active encounter references an invalid node." };
     }
     const map = rehydrateMap(rawEncounter.map, squad, upgrades);
-    if (!map) return { run: null, error: "The active encounter map failed validation." };
+    if (!map) return { run: null, error: "The active encounter map failed strict validation." };
     if (currentNodeId !== node.id) {
       return { run: null, error: "The active encounter does not match current route progress." };
+    }
+    if (rawEncounter.turn !== "player" && rawEncounter.turn !== "enemy") {
+      return { run: null, error: "The active encounter has an invalid turn marker." };
     }
     activeEncounter = {
       nodeId: node.id,
       kind: node.kind,
       map,
-      turn: rawEncounter.turn === "enemy" ? "enemy" : "player",
+      turn: rawEncounter.turn,
     };
   }
   const selectedNode = currentNodeId

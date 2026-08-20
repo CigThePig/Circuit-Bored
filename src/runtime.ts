@@ -607,8 +607,9 @@ export function startRuntime(
     }
     const action = getAction(id);
     if (!actionEligibility(map, selected, id).ok) return;
-    if (action.targeting === "enemy") {
-      // Arm the action and wait for a tap on the board. Nothing is spent yet.
+    if (action.targeting !== "self") {
+      // Every targeted action owns the next board tap. Enemy-targeted actions
+      // resolve on hostiles; ally-targeted role abilities resolve on squadmates.
       pendingAction = id;
       redraw();
       return;
@@ -966,7 +967,9 @@ export function startRuntime(
       // pre-move state instead of a destination with an unconsumed watch.
       await delay(effect.durationMs);
       if (cancelled) return;
-      break;
+      // Independent watchers are independent reactions. Continue through the
+      // squad unless this shot actually ended the mover's turn by killing it.
+      if (enemy.hp <= 0) return;
     }
   };
 
@@ -997,7 +1000,9 @@ export function startRuntime(
       // see the player-move continuation that calls notifyState() below.
       await delay(effect.durationMs);
       if (cancelled) return;
-      break;
+      // A movement step can cross several separately-covered lanes. Let every
+      // eligible watcher react unless the mover has already been dropped.
+      if (player.hp <= 0) return;
     }
   }
 

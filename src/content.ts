@@ -262,6 +262,28 @@ export function stackCount(upgrades: readonly UpgradeId[], id: UpgradeId): numbe
   return upgrades.filter((upgrade) => upgrade === id).length;
 }
 
+function maxStatWithUpgrades(
+  base: number,
+  upgradeIds: readonly UpgradeId[],
+  key: "maxHp" | "maxAp",
+): number {
+  const delta = upgradeIds.reduce(
+    (sum, upgradeId) => sum + (getUpgrade(upgradeId)[key] ?? 0),
+    0,
+  );
+  return Math.max(1, base + delta);
+}
+
+/** Canonical maximum HP after every installed upgrade has been applied once. */
+export function maxHpWithUpgrades(baseMaxHp: number, upgradeIds: readonly UpgradeId[]): number {
+  return maxStatWithUpgrades(baseMaxHp, upgradeIds, "maxHp");
+}
+
+/** Canonical maximum AP after every installed upgrade has been applied once. */
+export function maxApWithUpgrades(baseMaxAp: number, upgradeIds: readonly UpgradeId[]): number {
+  return maxStatWithUpgrades(baseMaxAp, upgradeIds, "maxAp");
+}
+
 export function buildCombatProfile(
   archetypeId: UnitArchetypeId,
   upgradeIds: readonly UpgradeId[] = [],
@@ -291,10 +313,8 @@ export function makeArchetypeUnit(
   upgradeIds: readonly UpgradeId[] = [],
 ): Unit {
   const archetype = UNIT_ARCHETYPES[archetypeId];
-  const maxHpDelta = upgradeIds.reduce((sum, upgradeId) => sum + (getUpgrade(upgradeId).maxHp ?? 0), 0);
-  const maxApDelta = upgradeIds.reduce((sum, upgradeId) => sum + (getUpgrade(upgradeId).maxAp ?? 0), 0);
-  const maxHp = Math.max(1, archetype.maxHp + maxHpDelta);
-  const maxAp = Math.max(1, archetype.maxAp + maxApDelta);
+  const maxHp = maxHpWithUpgrades(archetype.maxHp, upgradeIds);
+  const maxAp = maxApWithUpgrades(archetype.maxAp, upgradeIds);
   return {
     id,
     team: archetype.team,
@@ -314,6 +334,13 @@ export function makeArchetypeUnit(
     shotsThisTurn: 0,
     killsThisTurn: 0,
     encounterShots: 0,
+    // The rest of the turn-local counters, so a unit is born in the same shape
+    // a reload rebuilds it in. Every reader defaults a missing counter to zero,
+    // but a save round-trip writes the zero back explicitly, and the encounter
+    // snapshot comparison in run.ts compares boards field by field.
+    overwatchShotsUsed: 0,
+    relaysThisTurn: 0,
+    flankRefundsThisTurn: 0,
     resolvingOverwatch: false,
   };
 }

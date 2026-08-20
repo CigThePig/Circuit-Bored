@@ -1,5 +1,6 @@
 import type { Unit } from "./map.ts";
 import {
+  isAimed,
   isBraced,
   isDashing,
   isSuppressed,
@@ -103,6 +104,15 @@ export function startingAp(unit: Unit): number {
  * `endUnitTurn` once the suppressed turn has actually been played.
  */
 export function beginUnitTurn(unit: Unit): void {
+  // A Marksman's telegraphed lock is the one prepared shot that deliberately
+  // crosses its own turn boundary. The stored aim intent names the exact target;
+  // ordinary Aim still expires here as before.
+  const preserveMarksmanLock =
+    unit.aiBehavior === "marksman" &&
+    isAimed(unit) &&
+    unit.intent?.kind === "aim" &&
+    unit.intent.targetId !== null;
+
   // AP is computed before any state is cleared, because a Brace set last turn
   // is exactly what shields this turn's action points from a suppression
   // applied in between. Clearing first would silently cancel that.
@@ -116,7 +126,7 @@ export function beginUnitTurn(unit: Unit): void {
   unit.overwatchShotsUsed = 0;
   unit.relaysThisTurn = 0;
   unit.flankRefundsThisTurn = 0;
-  setAimed(unit, false);
+  if (!preserveMarksmanLock) setAimed(unit, false);
   setHunkered(unit, false);
   setBraced(unit, false);
   setDashing(unit, false);
@@ -149,6 +159,12 @@ export function onUnitMoved(unit: Unit): void {
   unit.movesThisTurn = (unit.movesThisTurn ?? 0) + 1;
   unit.peekExposure = null;
   setAimed(unit, false);
+  // Hunker and Overwatch both describe a committed position. Carrying either
+  // state to different terrain would make the new tile inherit preparation
+  // that was paid for somewhere else.
+  setHunkered(unit, false);
+  unit.overwatch = false;
+  unit.overwatchShotsUsed = 0;
   // An anchor that walks away is no longer an anchor.
   setBraced(unit, false);
 }
