@@ -475,8 +475,8 @@ function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
       rangeRating(enemy.combat, wanted) === "strong" &&
       movementRange(enemy) > 0
     ) {
-      const destination = bestDestination(map, enemy, visible);
-      if (destination && (destination.x !== enemy.x || destination.y !== enemy.y)) {
+      const destination = bestRangeDestination(map, enemy, visible);
+      if (destination) {
         return {
           intent: makeIntent(
             movementIntentKind(enemy, visible, destination),
@@ -533,6 +533,48 @@ function shouldSuppress(map: GameMap, enemy: Unit, target: Unit): boolean {
   if (target.overwatch) return true;
   const preview = previewShot(map, enemy, target);
   return preview.shot.canShoot && preview.hitChance < 0.5;
+}
+
+/**
+ * Find a move that strictly improves a range-specialized unit's distance from
+ * its target without crossing reaction fire. If every better band position is
+ * watched, taking the current shot is the safer tactical choice.
+ */
+function bestRangeDestination(
+  map: GameMap,
+  enemy: Unit,
+  target: Unit,
+): PlannedDestination | null {
+  const wanted = preferredBand(enemy.combat);
+  const idealDistance = bandTargetDistance(wanted);
+  const currentGap = Math.abs(tileDistance(enemy, target) - idealDistance);
+  const candidates = reachableTiles(map, enemy).filter((candidate) =>
+    candidate.steps > 0 &&
+    Math.abs(tileDistance(candidate, target) - idealDistance) < currentGap
+  );
+  if (candidates.length === 0) return null;
+
+  const routeDistances = routeDistanceField(map, target, enemy);
+  const coverage = buildOverwatchCoverage(map, enemy, candidates);
+  let best: PlannedDestination | null = null;
+  let bestScore = -Infinity;
+  for (const candidate of candidates) {
+    const routeReactions = reactionsForPath(candidate.path, coverage);
+    if (routeReactions > 0) continue;
+    const score = scoreCandidate(
+      map,
+      enemy,
+      target,
+      candidate,
+      routeDistances,
+      routeReactions,
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      best = { x: candidate.x, y: candidate.y, path: candidate.path };
+    }
+  }
+  return best;
 }
 
 function bestDestination(
