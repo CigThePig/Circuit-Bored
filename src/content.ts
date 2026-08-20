@@ -334,6 +334,13 @@ export function makeArchetypeUnit(
     shotsThisTurn: 0,
     killsThisTurn: 0,
     encounterShots: 0,
+    // The rest of the turn-local counters, so a unit is born in the same shape
+    // a reload rebuilds it in. Every reader defaults a missing counter to zero,
+    // but a save round-trip writes the zero back explicitly, and the encounter
+    // snapshot comparison in run.ts compares boards field by field.
+    overwatchShotsUsed: 0,
+    relaysThisTurn: 0,
+    flankRefundsThisTurn: 0,
     resolvingOverwatch: false,
   };
 }

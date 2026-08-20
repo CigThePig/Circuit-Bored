@@ -259,8 +259,26 @@ export function enterNode(run: RunState, nodeId: string): void {
   run.status = "encounter";
 }
 
+/**
+ * Serialize with sorted keys, so only values decide equality.
+ *
+ * The two snapshots compared below are built by different literals: one side is
+ * a `cloneMap` of the live board, the other is the object `sanitizeLoadedMap`
+ * assembled while opening the save. Those literals list their fields in
+ * different orders, so plain `JSON.stringify` reported a reloaded encounter as
+ * different from itself and the rollback below silently never fired.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(",")}}`;
+}
+
 function mapSnapshotsEqual(a: GameMap, b: GameMap): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return stableStringify(a) === stableStringify(b);
 }
 
 function encounterRngSession(run: RunState): EncounterRngSession {
@@ -479,8 +497,12 @@ function activeMapStructureIsValid(rawMap: unknown): rawMap is GameMap {
   const livingEnemies = candidate.units.filter((unit) =>
     isObject(unit) && unit.team === "enemy" && typeof unit.hp === "number" && unit.hp > 0
   ).length;
-  const terminalPlayerDefeat = livingPlayers === 0 && livingEnemies > 0;
-  const terminalEnemyDefeat = livingEnemies === 0 && livingPlayers > 0;
+  // A side being wiped out is a legitimate terminal board: the killing blow can
+  // be saved before its completion overlay is acknowledged. Each side is judged
+  // on its own, so a board where both sides are down still opens instead of
+  // discarding the run at the very moment it ended.
+  const terminalPlayerDefeat = livingPlayers === 0;
+  const terminalEnemyDefeat = livingEnemies === 0;
   return !report.issues.some((issue) => {
     if (issue.severity !== "error") return false;
     if (issue.code === "NO_PLAYER_SPAWN" && terminalPlayerDefeat) return false;

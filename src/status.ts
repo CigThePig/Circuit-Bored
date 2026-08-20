@@ -100,8 +100,19 @@ export function createStatuses(): UnitStatuses {
   };
 }
 
+/**
+ * Copy a unit's statuses for a cloned map.
+ *
+ * An all-default object and no object at all mean the same thing, and the save
+ * layer already writes the second form: `sanitizeStatuses` drops statuses that
+ * carry nothing. A unit whose last status expired keeps a spent object in
+ * memory, so cloning it verbatim made a live board and its own reload differ by
+ * a field that means nothing. Cloning canonicalises instead, which is what makes
+ * a saved encounter compare equal to the board it was written from.
+ */
 export function cloneStatuses(statuses: UnitStatuses | undefined): UnitStatuses | undefined {
-  return statuses ? { ...statuses } : undefined;
+  if (!statuses || statusesAreClear(statuses)) return undefined;
+  return { ...statuses };
 }
 
 /** True when every field is at its default, so the object carries no meaning. */

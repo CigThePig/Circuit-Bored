@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { cloneMap } from "../src/map.ts";
 import { SeededRng } from "../src/rng.ts";
+import { setAimed } from "../src/status.ts";
 import {
   RUN_STORAGE_KEY,
   availableNodes,
@@ -208,6 +209,48 @@ describe("Wave 2 atomic encounter persistence", () => {
     updateActiveEncounter(run, cloneMap(run.activeEncounter!.map), "enemy");
     expect(nextRandom(run)).toBe(expectedFirstRoll);
     expect(run.rngState).toBe(before);
+  });
+
+  it("still recognises its own phase start after the run has been reloaded", () => {
+    // The board a save is opened with and the board a runtime clones are built
+    // by different literals. Recognising the phase start has to depend on the
+    // state they describe, not on the order their fields happen to be written
+    // in, or a resumed encounter never rolls its abandoned draws back.
+    const run = encounter("RNG-RELOAD-ROLLBACK");
+    updateActiveEncounter(run, cloneMap(run.activeEncounter!.map), "enemy");
+    expect(saveRun(run)).toBe(true);
+
+    const resumed = loadRunWithReport().run!;
+    expect(resumed.activeEncounter!.turn).toBe("enemy");
+    const before = resumed.rngState;
+    const expectedFirstRoll = new SeededRng(before).next();
+    expect(nextRandom(resumed)).toBe(expectedFirstRoll);
+
+    // The abandoned runtime is replaced; the new one reports the same phase
+    // start it was mounted on, which must discard the draw above.
+    updateActiveEncounter(resumed, cloneMap(resumed.activeEncounter!.map), "enemy");
+    expect(nextRandom(resumed)).toBe(expectedFirstRoll);
+    expect(resumed.rngState).toBe(before);
+  });
+
+  it("round-trips a board whose last tactical status has already expired", () => {
+    // A unit that used Aim and then spent it keeps an all-default status object
+    // in memory, while the save format stores "nothing active" as no object at
+    // all. Both mean the same thing, so a reload has to produce the same board.
+    const run = encounter("EXPIRED-STATUS");
+    const live = run.activeEncounter!.map;
+    const unit = live.units.find((candidate) => candidate.team === "player")!;
+    setAimed(unit, true);
+    setAimed(unit, false);
+    expect(unit.statuses).toBeDefined();
+
+    updateActiveEncounter(run, live, "player");
+    const committed = run.activeEncounter!.map;
+    expect(saveRun(run)).toBe(true);
+
+    const loaded = loadRunWithReport();
+    expect(loaded.error).toBeNull();
+    expect(loaded.run!.activeEncounter!.map).toEqual(committed);
   });
 
   it("commits the whole enemy result and its random cursor together", () => {
