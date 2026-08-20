@@ -674,6 +674,86 @@ export function watchedTiles(
 }
 
 /**
+ * Every tile in `tiles` from which `shooter` would have a firing line on at
+ * least one living hostile, with the hostiles it could reach from there.
+ *
+ * This is the mirror of `watchedTiles`. The AI already asks this question of
+ * every tile it can reach - a firing solution is the single heaviest term in
+ * its movement scoring - while the board could only ever show the player the
+ * shot they have from the tile they are standing on. A hostile that walks two
+ * tiles to open a lane is then taking a shot the player had no way to find,
+ * which is the asymmetry this exists to close: same question, same function,
+ * asked on the player's behalf.
+ *
+ * `tiles` are candidate standing positions, so the shooter is relocated onto
+ * each one for the test - occupancy is part of peek eligibility, and a
+ * detached copy would leave `unitAt` observing the shooter's old tile. Its
+ * committed lean is dropped for the test because walking cancels it
+ * (`onUnitMoved`); a target's lean is real and still counts. The map is
+ * restored exactly, and nothing here mutates it.
+ */
+export function firingPositions(
+  map: GameMap,
+  shooter: Unit,
+  tiles: readonly { x: number; y: number }[],
+): { x: number; y: number; targetIds: string[] }[] {
+  if (shooter.hp <= 0) return [];
+  const hostiles = map.units.filter(
+    (unit) => unit.hp > 0 && unit.team !== shooter.team,
+  );
+  if (hostiles.length === 0) return [];
+
+  const out: { x: number; y: number; targetIds: string[] }[] = [];
+  const originalX = shooter.x;
+  const originalY = shooter.y;
+  const originalExposure = shooter.peekExposure;
+  try {
+    shooter.peekExposure = null;
+    for (const tile of tiles) {
+      shooter.x = tile.x;
+      shooter.y = tile.y;
+      const targetIds: string[] = [];
+      for (const hostile of hostiles) {
+        if (canShootTarget(map, shooter, hostile).canShoot) targetIds.push(hostile.id);
+      }
+      if (targetIds.length > 0) out.push({ x: tile.x, y: tile.y, targetIds });
+    }
+  } finally {
+    shooter.x = originalX;
+    shooter.y = originalY;
+    shooter.peekExposure = originalExposure;
+  }
+  return out;
+}
+
+/**
+ * The subset of `tiles` that opens a firing line the shooter does not already
+ * have from where it stands, with the hostiles each one adds.
+ *
+ * This, rather than `firingPositions`, is what the board publishes. A unit that
+ * already has a line on a hostile is told so by its sight line and hit-chance
+ * pill, and re-marking every tile that re-offers the same shot buries the
+ * movement radius under a lattice of identical marks. What the player cannot
+ * otherwise discover is the tile that turns "no firing line" into a shot - the
+ * move an enemy makes routinely and the squad had no way to see.
+ */
+export function openingFiringPositions(
+  map: GameMap,
+  shooter: Unit,
+  tiles: readonly { x: number; y: number }[],
+): { x: number; y: number; targetIds: string[] }[] {
+  const already = new Set(
+    firingPositions(map, shooter, [{ x: shooter.x, y: shooter.y }])[0]?.targetIds ?? [],
+  );
+  const out: { x: number; y: number; targetIds: string[] }[] = [];
+  for (const position of firingPositions(map, shooter, tiles)) {
+    const gained = position.targetIds.filter((id) => !already.has(id));
+    if (gained.length > 0) out.push({ x: position.x, y: position.y, targetIds: gained });
+  }
+  return out;
+}
+
+/**
  * Returns the hit-chance penalty from cover the target gets vs this shooter.
  * Picks the adjacent tile facing the shooter on each axis where the shooter
  * actually approaches from; walls give COVER_PENALTY, half_cover gives

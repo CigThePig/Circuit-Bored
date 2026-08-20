@@ -22,6 +22,7 @@ import {
   type ShotEffect,
 } from "./render.ts";
 import {
+  openingFiringPositions,
   previewShot,
   resolveShot,
   settleOverwatch,
@@ -172,6 +173,21 @@ export function startRuntime(
   let pendingAction: ActionId | null = null;
 
   /**
+   * Why the last board tap did nothing, if it did nothing.
+   *
+   * The rule layer already produces a sentence for every refusal; without
+   * this the player taps a hostile, nothing happens, and the only available
+   * conclusion is that the game let the enemy take a shot it will not let
+   * them take.
+   *
+   * It answers one tap and nothing after it, so every entry point the player
+   * can act through - the board, the action tray, Intel, ending the turn -
+   * clears it on the way in. A sentence about a tap two actions ago is worse
+   * than no sentence at all.
+   */
+  let refusal: string | null = null;
+
+  /**
    * While on, tapping a hostile reads its dossier instead of shooting it.
    * Inspection needs its own mode because the enemies worth understanding are
    * exactly the ones the player can also shoot, so sharing the tap would make
@@ -210,6 +226,7 @@ export function startRuntime(
   intelBtn.title =
     "Intel — free\nTarget: a hostile.\nRead its role, its weakness, and what it is planning.";
   intelBtn.addEventListener("click", () => {
+    refusal = null;
     intelMode = !intelMode;
     if (intelMode) pendingAction = null;
     else inspected = null;
@@ -382,6 +399,7 @@ export function startRuntime(
     state.enemyPreviews = [];
     state.moveRange = null;
     state.watchedTiles = [];
+    state.firingPositions = [];
     moveField = null;
     if (!selected || turn !== "player" || busy) return;
     const range = movementRange(selected);
@@ -400,6 +418,22 @@ export function startRuntime(
           }
         }
         state.watchedTiles = [...watched.values()];
+
+        // The AI scores a firing solution from every tile it can reach, and
+        // weights it above everything else it considers. Showing the player
+        // only the shot they have from the tile they are standing on is what
+        // makes an enemy's ordinary reposition-and-fire look like a shot the
+        // squad could never have taken. Same question, same rule-layer
+        // function, asked for the selected operator.
+        //
+        // Only tiles whose walk still leaves the shot affordable qualify: a
+        // firing line the unit cannot pay for is not an option.
+        const shooter = selected;
+        const affordable = tiles.filter(
+          (tile) => shooter.ap - tile.apCost >= SHOOT_AP_COST,
+        );
+        state.firingPositions = openingFiringPositions(map, shooter, affordable)
+          .map((tile) => ({ x: tile.x, y: tile.y }));
       }
     }
     // While a targeted action is armed the board previews that action's
@@ -561,6 +595,14 @@ export function startRuntime(
         `${action.name} armed (${action.apCost} AP). Tap a highlighted ${who}, or tap ${action.shortLabel} again to cancel.`;
       return;
     }
+    // A refusal answers something the player just did, so it outranks the
+    // standing status hint below it. A suppressed operator may still shoot,
+    // and telling it only that it is suppressed when the real answer was "no
+    // firing line" is the silence this message exists to break.
+    if (refusal) {
+      hintLabel.textContent = refusal;
+      return;
+    }
     if (isSuppressed(unit)) {
       hintLabel.textContent =
         "Suppressed: reduced accuracy and one fewer action point. Cannot aim, suppress, or set overwatch.";
@@ -600,6 +642,7 @@ export function startRuntime(
   const onActionButton = (id: ActionId) => {
     if (turn !== "player" || outcome !== null || busy) return;
     if (!selected || selected.team !== "player" || selected.hp <= 0) return;
+    refusal = null;
     if (pendingAction === id) {
       pendingAction = null;
       redraw();
@@ -617,6 +660,7 @@ export function startRuntime(
     pendingAction = null;
     const outcomeResult = performAction(map, selected, id, null, random);
     if (!outcomeResult.ok) {
+      refusal = `${action.name} refused: ${outcomeResult.reason}`;
       redraw();
       return;
     }
@@ -761,6 +805,7 @@ export function startRuntime(
 
   const detachTap = attachTapHandler(canvas, () => map, ({ x, y }) => {
     if (turn !== "player" || outcome !== null || busy) return;
+    refusal = null;
     const tappedUnit = unitAt(map, x, y);
 
     // Intel is a read-only mode, so it answers every tap before anything can
@@ -788,6 +833,9 @@ export function startRuntime(
         const actionId = pendingAction;
         pendingAction = null;
         const support = performAction(map, actor, actionId, tappedUnit, random);
+        if (!support.ok) {
+          refusal = `${getAction(actionId).name} refused: ${support.reason}`;
+        }
         if (support.ok) {
           addFloating(
             getAction(actionId).shortLabel.toUpperCase(),
@@ -821,6 +869,7 @@ export function startRuntime(
       const outcomeResult = performAction(map, shooter, actionId, tappedUnit, random);
       pendingAction = null;
       if (!outcomeResult.ok) {
+        refusal = `${getAction(actionId).name} refused: ${outcomeResult.reason}`;
         redraw();
         return;
       }
@@ -1099,6 +1148,7 @@ export function startRuntime(
 
   endTurnBtn.addEventListener("click", () => {
     if (turn !== "player" || outcome !== null || busy) return;
+    refusal = null;
     turn = "enemy";
     // Statuses whose duration is counted in the owner's turns expire when that
     // turn actually ends, so a suppression applied to the enemy on this turn

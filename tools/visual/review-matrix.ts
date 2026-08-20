@@ -117,6 +117,11 @@ export const VISUAL_REVIEW_CASES: ReviewCase[] = [
   makeCase({ sceneId: "combat-states", cell: 28, note: "Minimum size: every status must stay identifiable and must not bury HP or AP." }),
   makeCase({ sceneId: "combat-states", cell: 28, view: "grayscale", note: "Statuses must be separable by shape and letter with no hue at all." }),
   makeCase({ sceneId: "combat-states", cell: 56, note: "Chip and marker construction inspected closely." }),
+  makeCase({
+    sceneId: "combat-states",
+    view: "squint",
+    note: "Ground cues under squint: firing positions must not outrank units, targets, or the watched lane they overlap.",
+  }),
 
   // Operator identity has to survive the same squint the archetypes do: if
   // three roles read as one silhouette with different badges, the pass failed.
