@@ -1,0 +1,48 @@
+name: Wave 1 Mechanical Truth Repair
+
+on:
+  push:
+    branches:
+      - fix/wave-1-mechanical-truth
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out working branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/wave-1-mechanical-truth
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Wave 1 patch
+        run: python3 tools/apply-wave1.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Run full repository checks
+        run: npm run check
+
+      - name: Commit tested Wave 1 changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src/rules.ts src/actions.ts src/runtime.ts src/ai.ts README.md tests/intent.test.ts tests/wave1-mechanical-truth.test.ts
+          git rm -- tools/apply-wave1.py .github/workflows/wave1-apply.yml
+          git diff --cached --check
+          git commit -m "Fix Wave 1 mechanical truth issues"
+          git push origin HEAD:fix/wave-1-mechanical-truth
