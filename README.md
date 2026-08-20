@@ -108,8 +108,15 @@ Squad HP, deaths, and installed circuits persist between encounters; AP and
 turn-local action state reset normally. The current seed is always visible and
 can be entered on the title screen to reproduce a route.
 
-Active runs use the versioned `circuit-bored.run.v1` browser save. Editor maps
-continue to use their separate `circuit-bored.map.v1` format.
+Active runs use the versioned `circuit-bored.run.v1` browser save. Active combat
+snapshots are strict rather than repaired: operator presence, terrain, tactical
+state, counters, and canonical HP/AP ceilings have to describe a real encounter.
+Player actions commit individually. An enemy phase commits as one deterministic
+transaction, so closing the app halfway through replays that same phase from its
+saved start instead of resuming from a half-scheduled board. Combat RNG advances
+with the battlefield snapshot that consumed it, never ahead of it. Editor maps
+continue to use their separate, deliberately forgiving `circuit-bored.map.v1`
+format.
 
 ## Architecture
 
