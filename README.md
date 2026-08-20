@@ -100,6 +100,32 @@ travel (`src/rules.ts`), so a turn covers twice the ground of a turn where
 every tile cost a full point while the number of shots it can contain is
 unchanged.
 
+## Firing positions
+
+The board publishes where a shot is, not only where one already exists.
+
+The AI scores a firing solution from every tile it can reach, and weights that
+above everything else it considers, so a hostile that steps two tiles to clear a
+corner and fires is doing something ordinary. Shown only the shot it has from
+the tile it is standing on, the squad had no way to find the same move, and an
+enemy repositioning into a lane read as a shot the player was not allowed to
+take.
+
+Selecting an operator therefore marks, with a crosshair, every tile inside its
+movement radius that would open a firing line it does not already have - and
+only tiles whose walk still leaves the shot affordable, because a line the unit
+cannot pay for is not an option. The tiles come from `openingFiringPositions`
+in `src/combat.ts`, the same shooting relationship the AI, overwatch, and
+resolution all ask, so the mark can never promise a shot the rules would refuse.
+It is the opportunity half of the radius the watched-lane hatch already covers
+in hazard.
+
+The rules themselves are reciprocal, and `tests/shot-symmetry.test.ts` holds
+them to it: line of sight gives the same verdict in both directions, every shot
+the AI takes is one the player's own action pipeline would allow, and the only
+one-way firing lines are corner peeks - which the shooter pays for by committing
+to a silhouette its target can shoot back at.
+
 ## Run loop
 
 A run is a deterministic seven-node route. Players choose between standard and

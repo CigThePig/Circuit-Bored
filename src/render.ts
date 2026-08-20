@@ -109,6 +109,16 @@ export type WatchedTile = {
 };
 
 /**
+ * Ground inside the selected unit's move radius that opens a firing line on a
+ * hostile. The rule layer decides which tiles qualify (`firingPositions`); the
+ * renderer only marks them.
+ */
+export type FiringPositionTile = {
+  x: number;
+  y: number;
+};
+
+/**
  * An enemy's published plan, drawn as a small banner over its cell. The text
  * comes from the AI's own planner via `intentLabel`; this module never decides
  * what an enemy is doing.
@@ -233,6 +243,11 @@ export type RenderState = {
   threatMarkers?: ThreatMarker[];
   /** Enemy-overwatched tiles inside the selected unit's movement radius. */
   watchedTiles?: WatchedTile[];
+  /**
+   * Tiles inside that radius the selected unit could shoot a hostile from.
+   * Only ever populated with tiles whose walk still leaves the shot affordable.
+   */
+  firingPositions?: FiringPositionTile[];
   /** Published enemy plans. Rendered above their units, below the HUD text. */
   intentMarkers?: IntentMarker[];
   /** Active Guard tethers between an anchor and the squadmate it shields. */
@@ -342,6 +357,15 @@ export function draw(canvas: HTMLCanvasElement, state: RenderState, nowMs = perf
 
   if (state.moveRange && state.moveRange.tiles.length > 0) {
     drawMoveRange(ctx, cell, state.moveRange);
+  }
+
+  // A firing position sits on the radius it qualifies and under the watched
+  // lane, so ground the player can shoot from never hides ground the enemy
+  // already covers. Opportunity must not paint over danger.
+  if (state.firingPositions && state.firingPositions.length > 0) {
+    for (const tile of state.firingPositions) {
+      drawFiringPosition(ctx, cell, tile);
+    }
   }
 
   // Above the radius it qualifies, below units and targets: a watched lane is
@@ -2189,6 +2213,47 @@ function drawStatusChips(
  * strokes are a different shape from the radius diamonds and from the target
  * brackets, so the tile keeps one meaning per mark.
  */
+/**
+ * An axis-aligned crosshair on a tile the selected unit could shoot from.
+ *
+ * Shape carries the meaning, not colour: the move diamond is a rotated square,
+ * the watched lane is a diagonal hatch, threat is a chevron, and a target wears
+ * brackets. A plus is none of those, and its arms stay several pixels long at
+ * the 28 px mobile cell. It is deliberately quieter than a target cue - this is
+ * ground the player could use, not a shot they are about to take.
+ */
+function drawFiringPosition(
+  ctx: CanvasRenderingContext2D,
+  cell: number,
+  tile: FiringPositionTile,
+): void {
+  const cx = tile.x * cell + cell / 2;
+  const cy = tile.y * cell + cell / 2;
+  const arm = cell * 0.17;
+
+  ctx.save();
+  ctx.lineCap = "round";
+  // Dark backing first, so the mark survives a bright floor plate and the
+  // movement diamond it is drawn over. Both passes stay dim: under squint this
+  // is ground information and must lose to the units standing on it.
+  for (const pass of [0, 1]) {
+    ctx.strokeStyle = pass === 0
+      ? PALETTE.FIRING_POSITION_BACKING
+      : PALETTE.FIRING_POSITION;
+    ctx.lineWidth = pass === 0
+      ? Math.max(2, cell * 0.07)
+      : Math.max(1.1, cell * 0.038);
+    ctx.globalAlpha = pass === 0 ? 0.62 : 0.76;
+    ctx.beginPath();
+    ctx.moveTo(cx - arm, cy);
+    ctx.lineTo(cx + arm, cy);
+    ctx.moveTo(cx, cy - arm);
+    ctx.lineTo(cx, cy + arm);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawWatchedTile(
   ctx: CanvasRenderingContext2D,
   cell: number,

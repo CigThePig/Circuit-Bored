@@ -22,6 +22,7 @@ import {
   type ShotEffect,
 } from "./render.ts";
 import {
+  openingFiringPositions,
   previewShot,
   resolveShot,
   settleOverwatch,
@@ -170,6 +171,16 @@ export function startRuntime(
    * a rule.
    */
   let pendingAction: ActionId | null = null;
+
+  /**
+   * Why the last board tap did nothing, if it did nothing.
+   *
+   * The rule layer already produces a sentence for every refusal; without
+   * this the player taps a hostile, nothing happens, and the only available
+   * conclusion is that the game let the enemy take a shot it will not let
+   * them take. Cleared by the next tap, so it never outlives its cause.
+   */
+  let refusal: string | null = null;
 
   /**
    * While on, tapping a hostile reads its dossier instead of shooting it.
@@ -382,6 +393,7 @@ export function startRuntime(
     state.enemyPreviews = [];
     state.moveRange = null;
     state.watchedTiles = [];
+    state.firingPositions = [];
     moveField = null;
     if (!selected || turn !== "player" || busy) return;
     const range = movementRange(selected);
@@ -400,6 +412,22 @@ export function startRuntime(
           }
         }
         state.watchedTiles = [...watched.values()];
+
+        // The AI scores a firing solution from every tile it can reach, and
+        // weights it above everything else it considers. Showing the player
+        // only the shot they have from the tile they are standing on is what
+        // makes an enemy's ordinary reposition-and-fire look like a shot the
+        // squad could never have taken. Same question, same rule-layer
+        // function, asked for the selected operator.
+        //
+        // Only tiles whose walk still leaves the shot affordable qualify: a
+        // firing line the unit cannot pay for is not an option.
+        const shooter = selected;
+        const affordable = tiles.filter(
+          (tile) => shooter.ap - tile.apCost >= SHOOT_AP_COST,
+        );
+        state.firingPositions = openingFiringPositions(map, shooter, affordable)
+          .map((tile) => ({ x: tile.x, y: tile.y }));
       }
     }
     // While a targeted action is armed the board previews that action's
@@ -569,6 +597,10 @@ export function startRuntime(
     // While a shot is on the table, say which band it is at and how this
     // operator's weapon feels about that. Range only matters if the player can
     // see it, and this is the moment it matters.
+    if (refusal) {
+      hintLabel.textContent = refusal;
+      return;
+    }
     const shotNote = bestShotNote(unit);
     hintLabel.textContent = unit.ap >= SHOOT_AP_COST
       ? `Tap a hostile to shoot (${SHOOT_AP_COST} AP), tap ground to move, or choose an action.${shotNote}`
@@ -761,6 +793,7 @@ export function startRuntime(
 
   const detachTap = attachTapHandler(canvas, () => map, ({ x, y }) => {
     if (turn !== "player" || outcome !== null || busy) return;
+    refusal = null;
     const tappedUnit = unitAt(map, x, y);
 
     // Intel is a read-only mode, so it answers every tap before anything can
@@ -788,6 +821,9 @@ export function startRuntime(
         const actionId = pendingAction;
         pendingAction = null;
         const support = performAction(map, actor, actionId, tappedUnit, random);
+        if (!support.ok) {
+          refusal = `${getAction(actionId).name} refused: ${support.reason}`;
+        }
         if (support.ok) {
           addFloating(
             getAction(actionId).shortLabel.toUpperCase(),
@@ -821,6 +857,7 @@ export function startRuntime(
       const outcomeResult = performAction(map, shooter, actionId, tappedUnit, random);
       pendingAction = null;
       if (!outcomeResult.ok) {
+        refusal = `${getAction(actionId).name} refused: ${outcomeResult.reason}`;
         redraw();
         return;
       }

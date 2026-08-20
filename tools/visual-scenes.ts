@@ -28,8 +28,13 @@ import { paintBoundary } from "../src/generationMotifs.ts";
 import { dominantLandmark, environmentProfile, type MapRect } from "../src/environment.ts";
 import { setTile, type GameMap } from "../src/map.ts";
 import { computeMovementField, movementDestinations } from "../src/movement.ts";
-import { applySuppression, previewShot, watchedTiles } from "../src/combat.ts";
-import { performAction } from "../src/actions.ts";
+import {
+  applySuppression,
+  openingFiringPositions,
+  previewShot,
+  watchedTiles,
+} from "../src/combat.ts";
+import { performAction, SHOOT_AP_COST } from "../src/actions.ts";
 import { beginUnitTurn } from "../src/rules.ts";
 import { refreshEnemyIntents } from "../src/ai.ts";
 import { intentLabel } from "../src/intent.ts";
@@ -385,6 +390,22 @@ function combatStatesScene(): VisualScene {
     shooter,
     state.moveRange.tiles,
   );
+  // The opportunity half of the same radius. Both cues describe ground rather
+  // than units, they overlap on real boards, and the review question is whether
+  // a tile that is both a firing position and a watched lane still reads as
+  // dangerous. The production rule decides which tiles qualify, and only tiles
+  // whose walk leaves the shot affordable are offered - the same filter the
+  // runtime applies.
+  state.firingPositions = openingFiringPositions(
+    map,
+    shooter,
+    state.moveRange.tiles.filter(
+      (tile) => shooter.ap - tile.apCost >= SHOOT_AP_COST,
+    ),
+  ).map((tile) => ({ x: tile.x, y: tile.y }));
+  if (state.firingPositions.length === 0) {
+    throw new Error("Combat-state scene has no production firing positions to review");
+  }
 
   for (const target of [flanked, crossfired]) {
     const preview = previewShot(map, shooter, target);
@@ -422,11 +443,13 @@ function combatStatesScene(): VisualScene {
     title: "Tactical state matrix",
     description:
       "Aimed, hunkered, overwatching, and suppressed units beside a flanked target, " +
-      "a crossfired target, and the enemy-watched tiles inside a movement radius.",
+      "a crossfired target, and the enemy-watched and firing-position tiles inside a movement radius.",
     review:
       "Each status chip should be identifiable at 28 px and in grayscale without reading its colour, " +
       "the Exposed arrows should read as 'caught between angles' rather than as another badge, " +
-      "watched ground should stay legible as walkable, and no cue may cover a face, weapon, HP, or AP.",
+      "watched ground should stay legible as walkable, firing-position crosshairs should read as " +
+      "ground worth walking to without competing with the target cues or hiding the watched hatch " +
+      "they share cells with, and no cue may cover a face, weapon, HP, or AP.",
     state,
   };
 }

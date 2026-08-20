@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { UNIT_ARCHETYPES } from "../src/content.ts";
-import { exposedAgainst, previewShot } from "../src/combat.ts";
+import { exposedAgainst, firingPositions, previewShot } from "../src/combat.ts";
 import {
   guardedBy,
   isAimed,
@@ -13,6 +13,7 @@ import {
 import { activeGuardian } from "../src/combat.ts";
 import { intentLabel } from "../src/intent.ts";
 import { planEnemyIntent } from "../src/ai.ts";
+import { SHOOT_AP_COST } from "../src/actions.ts";
 import { validateMap } from "../src/validation.ts";
 import { dominantLandmark, LANDMARK_KINDS } from "../src/environment.ts";
 import { generatedEncounterDiagnostics } from "../src/generation.ts";
@@ -93,6 +94,30 @@ describe("visual laboratory", () => {
     // Some of the radius must stay unwatched, or the review cannot judge the
     // hazard mark against the ordinary walkable ground it sits beside.
     expect(state.watchedTiles!.length).toBeLessThan(reachable.size);
+
+    // Firing positions are the opportunity half of the same radius, and the
+    // review has to see them beside the hazard ticks rather than on their own
+    // board. Same subset rule, same "not the whole radius" rule.
+    const firing = state.firingPositions!;
+    expect(firing.length).toBeGreaterThan(0);
+    expect(firing.length).toBeLessThan(reachable.size);
+    for (const tile of firing) {
+      expect(reachable.has(`${tile.x},${tile.y}`)).toBe(true);
+    }
+    // Every marked tile has to be a tile the production rule agrees on, and the
+    // walk to it has to leave the shot payable.
+    const truthful = new Set(
+      firingPositions(state.map, shooter, state.moveRange!.tiles)
+        .map((tile) => `${tile.x},${tile.y}`),
+    );
+    const costs = new Map(
+      state.moveRange!.tiles.map((tile) => [`${tile.x},${tile.y}`, tile.apCost]),
+    );
+    for (const tile of firing) {
+      const key = `${tile.x},${tile.y}`;
+      expect(truthful.has(key)).toBe(true);
+      expect(shooter.ap - costs.get(key)!).toBeGreaterThanOrEqual(SHOOT_AP_COST);
+    }
   });
 
   it("builds operator roles and enemy intent from production rules only", () => {

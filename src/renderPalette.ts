@@ -119,6 +119,13 @@ export const PALETTE = {
   /** Enemy-controlled ground shown across the selected unit's move radius. */
   WATCHED_LANE: "#ff7a52",
   WATCHED_LANE_SOFT: "rgba(255, 122, 82, 0.20)",
+  /**
+   * Ground inside the move radius that opens a firing line. An axis-aligned
+   * crosshair, so it cannot be confused with the move diamond it sits on, the
+   * watched lane's diagonal hatch, or the threat chevron.
+   */
+  FIRING_POSITION: "#80e5ff",
+  FIRING_POSITION_BACKING: "rgba(4, 7, 11, 0.8)",
 
   // Operator roles and enemy plans. Each also carries a letter or a shape in
   // the renderer, so none of these is the sole carrier of its meaning.
