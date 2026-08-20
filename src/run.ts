@@ -153,15 +153,69 @@ export function currentNode(run: RunState): RouteNode | null {
   return run.route.flat().find((node) => node.id === run.currentNodeId) ?? null;
 }
 
+/** Tactical circuits tied to a role should disappear when nobody can use them. */
+const ROLE_UPGRADE_REQUIREMENTS: Partial<
+  Record<UpgradeId, EncounterSquadMember["archetypeId"]>
+> = {
+  target_designator: "operator",
+  sprint_servos: "runner",
+  shield_projector: "bulwark",
+};
+
+function upgradeHasLivingUser(run: RunState, id: UpgradeId): boolean {
+  const required = ROLE_UPGRADE_REQUIREMENTS[id];
+  if (!required) return true;
+  return run.squad.some((member) => member.archetypeId === required && member.hp > 0);
+}
+
+/**
+ * Lightly bias a reward toward the build the player has already begun without
+ * turning a seeded roguelike into a deterministic shopping list. Existing
+ * stacks and tags are useful signals that a circuit participates in an actual
+ * plan; the seeded shuffle remains the tie-break, so different runs still
+ * surface different combinations.
+ */
+function rewardContextScore(run: RunState, id: UpgradeId): number {
+  const candidate = getUpgrade(id);
+  let score = stackCount(run.upgrades, id) > 0 ? 2 : 0;
+  for (const installedId of run.upgrades) {
+    if (getUpgrade(installedId).tag === candidate.tag) score += 1;
+  }
+  // Tactical actions are the systems that make positioning alter the fight,
+  // so they receive a small nudge rather than competing only on flat stats.
+  if (candidate.tag === "tactic") score += 1;
+  return score;
+}
+
 function generateRewards(run: RunState, count: number): UpgradeId[] {
   const eligible = UPGRADES.filter(
-    (upgrade) => stackCount(run.upgrades, upgrade.id) < upgrade.maxStacks,
+    (upgrade) =>
+      stackCount(run.upgrades, upgrade.id) < upgrade.maxStacks &&
+      upgradeHasLivingUser(run, upgrade.id),
   );
   if (eligible.length === 0) return [];
+
   const rng = new SeededRng(run.rngState);
-  const rewards = rng.shuffle(eligible).slice(0, Math.min(count, eligible.length)).map((upgrade) => upgrade.id);
+  const ranked = rng.shuffle(eligible)
+    .map((upgrade, tieBreak) => ({
+      upgrade,
+      tieBreak,
+      score: rewardContextScore(run, upgrade.id),
+    }))
+    .sort((a, b) => b.score - a.score || a.tieBreak - b.tieBreak)
+    .map(({ upgrade }) => upgrade);
+
+  const selected: typeof ranked = [];
+  const tactical = ranked.find((upgrade) => upgrade.tag === "tactic");
+  if (tactical && count > 0) selected.push(tactical);
+  for (const upgrade of ranked) {
+    if (selected.includes(upgrade)) continue;
+    selected.push(upgrade);
+    if (selected.length >= Math.min(count, eligible.length)) break;
+  }
+
   run.rngState = rng.snapshot().state;
-  return rewards;
+  return selected.map((upgrade) => upgrade.id);
 }
 
 export function enterNode(run: RunState, nodeId: string): void {

@@ -1,5 +1,6 @@
 import { canShootTarget } from "./combat.ts";
 import { getTile, inBounds, setTile, type GameMap, type TileType, type Unit } from "./map.ts";
+import { diagonalIsClear, MOVE_DIRECTIONS } from "./movement.ts";
 import { levelThemeId, type LevelThemeId } from "./themes.ts";
 import type { Point } from "./generationMotifs.ts";
 import {
@@ -256,6 +257,14 @@ function largestOpenSquare(map: GameMap): number {
   return largest;
 }
 
+/**
+ * Gameplay walking distance. Generation used to count only orthogonal floor
+ * steps even though every real unit walks in eight directions. That made a
+ * diagonal lane look almost twice as long to spawn validation as it was to the
+ * actual combatants. This field deliberately uses the movement module's exact
+ * diagonal corner rule while leaving the structural topology metrics above
+ * orthogonal.
+ */
 function distanceGrid(map: GameMap, start: Point, blockedKey?: string): Map<string, number> {
   const distances = new Map<string, number>();
   const queue: Point[] = [start];
@@ -263,10 +272,11 @@ function distanceGrid(map: GameMap, start: Point, blockedKey?: string): Map<stri
   while (queue.length > 0) {
     const current = queue.shift()!;
     const distance = distances.get(pointKey(current))!;
-    for (const direction of DIRECTIONS) {
+    for (const direction of MOVE_DIRECTIONS) {
       const next = { x: current.x + direction.x, y: current.y + direction.y };
       const key = pointKey(next);
       if (key === blockedKey || distances.has(key) || getTile(map, next.x, next.y) !== "floor") continue;
+      if (!diagonalIsClear(map, current.x, current.y, next.x, next.y)) continue;
       distances.set(key, distance + 1);
       queue.push(next);
     }

@@ -104,10 +104,17 @@ export function rangeRating(profile: RangeCarrier, band: RangeBand): RangeRating
   return "even";
 }
 
-/** The band a unit is happiest in, for AI positioning and HUD summaries. */
+/**
+ * The band a unit is happiest in, for AI positioning and HUD summaries.
+ *
+ * Medium is the neutral tie-break. A flat profile has no range identity, so it
+ * must not acquire a secret close-range preference merely because `close` is
+ * the first entry in RANGE_BANDS. A genuinely stronger close or long band can
+ * still displace medium with a strictly better value.
+ */
 export function preferredBand(profile: RangeCarrier): RangeBand {
   let best: RangeBand = "medium";
-  let bestValue = -Infinity;
+  let bestValue = rangeAccuracy(profile, "medium") + rangeDamage(profile, "medium") * 0.1;
   for (const band of RANGE_BANDS) {
     const value = rangeAccuracy(profile, band) + rangeDamage(profile, band) * 0.1;
     if (value > bestValue) {
