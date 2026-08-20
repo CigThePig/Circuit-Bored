@@ -1,5 +1,5 @@
 import type { GameMap, Unit } from "./map.ts";
-import { isPassable, unitAt } from "./map.ts";
+import { cloneMap, isPassable, unitAt } from "./map.ts";
 import {
   canStep,
   computeMovementField,
@@ -30,8 +30,8 @@ import {
   SHOOT_AP_COST,
   SUPPRESS_AP_COST,
 } from "./actions.ts";
-import { isAimed, isHunkered, isSuppressed } from "./status.ts";
-import { onUnitMoved } from "./rules.ts";
+import { isAimed, isHunkered, isSuppressed, setAimed } from "./status.ts";
+import { beginUnitTurn, onUnitMoved } from "./rules.ts";
 import {
   bandTargetDistance,
   preferredBand,
@@ -422,6 +422,26 @@ function bestVisibleTarget(map: GameMap, enemy: Unit): Unit | null {
   return best;
 }
 
+/** The exact operator a prepared Marksman lock belongs to, if it is still valid. */
+function marksmanLockedTarget(map: GameMap, enemy: Unit): Unit | null {
+  if (enemy.aiBehavior !== "marksman" || !isAimed(enemy)) return null;
+  if (enemy.intent?.kind !== "aim" || !enemy.intent.targetId) return null;
+  if (isSuppressed(enemy)) return null;
+  const target = map.units.find((unit) =>
+    unit.id === enemy.intent!.targetId && unit.team === "player" && unit.hp > 0
+  ) ?? null;
+  if (!target) return null;
+  return canShootTarget(map, enemy, target).canShoot ? target : null;
+}
+
+/** Break a stale lock instead of letting its Aim bonus migrate to another target. */
+function validateMarksmanLock(map: GameMap, enemy: Unit): Unit | null {
+  if (enemy.aiBehavior !== "marksman" || !isAimed(enemy)) return null;
+  const target = marksmanLockedTarget(map, enemy);
+  if (!target) setAimed(enemy, false);
+  return target;
+}
+
 /**
  * Decide what `enemy` is trying to do, and say so.
  *
@@ -460,20 +480,23 @@ function planEnemyTurn(map: GameMap, enemy: Unit): EnemyPlan {
   if (enemy.hp <= 0) return idle;
   if (livingPlayers(map).length === 0) return idle;
 
-  const visible = bestVisibleTarget(map, enemy);
   const behavior = enemy.aiBehavior ?? "balanced";
   const wanted = preferredBand(enemy.combat);
 
   const shooting = (intent: EnemyIntent, target: Unit): EnemyPlan =>
     ({ intent, target, destination: null });
 
+  // A prepared Marksman shot belongs to the operator named when the lock was
+  // acquired. It never retargets just because somebody else becomes easier to
+  // hit during the player's response turn.
+  const locked = behavior === "marksman" ? marksmanLockedTarget(map, enemy) : null;
+  if (locked) {
+    return shooting(makeIntent("aim", locked.id, { x: locked.x, y: locked.y }), locked);
+  }
+
+  const visible = bestVisibleTarget(map, enemy);
   if (visible) {
     const band = rangeBandBetween(enemy, visible);
-    // A Marksman that already holds a bead is committed: that is the whole
-    // point of telegraphing it.
-    if (behavior === "marksman" && isAimed(enemy)) {
-      return shooting(makeIntent("aim", visible.id, { x: visible.x, y: visible.y }), visible);
-    }
     // It settles on a target one turn before firing, so the player gets a turn
     // to break the plan. Only worth doing from a lane it actually likes.
     if (
@@ -574,6 +597,18 @@ function bestDestination(
  * begins and whenever the board changes enough that a stale plan would be
  * misleading, so what the player reads is always current.
  */
+function forecastEnemyIntent(map: GameMap, enemy: Unit): EnemyIntent {
+  // Intent is shown during the player's turn, but the enemy will act only after
+  // its own begin-turn reset. Forecast on a clone after applying that exact
+  // lifecycle so spent AP and stale per-turn counters cannot lie to the HUD.
+  const forecastMap = cloneMap(map);
+  const forecastEnemy = forecastMap.units.find((unit) => unit.id === enemy.id);
+  if (!forecastEnemy) return makeIntent("idle");
+  beginUnitTurn(forecastEnemy);
+  validateMarksmanLock(forecastMap, forecastEnemy);
+  return planEnemyIntent(forecastMap, forecastEnemy);
+}
+
 export function refreshEnemyIntents(map: GameMap): void {
   for (const unit of map.units) {
     if (unit.team !== "enemy") continue;
@@ -581,7 +616,11 @@ export function refreshEnemyIntents(map: GameMap): void {
       unit.intent = undefined;
       continue;
     }
-    unit.intent = planEnemyIntent(map, unit);
+    // If the player killed the named target or broke its firing line, break the
+    // live lock now before replacing the stored plan with a forecast. That is
+    // what prevents the prepared Aim from being transferred to a new target.
+    validateMarksmanLock(map, unit);
+    unit.intent = forecastEnemyIntent(map, unit);
   }
 }
 
@@ -591,6 +630,7 @@ export function beginEnemyTurn(
   session: AiSession,
 ): void {
   enemy.peekExposure = null;
+  validateMarksmanLock(map, enemy);
   // Replan at the top of the turn: the player has had a whole turn to
   // invalidate whatever was published, and the enemy acts on the current plan,
   // not the advertised one.
@@ -629,7 +669,12 @@ export function takeEnemyAction(
   // giving the player one turn to break it.
   if (intent.kind === "aim" && intentTarget && !isAimed(enemy)) {
     const outcome = performAction(map, enemy, "aim");
-    if (outcome.ok) return { kind: "aim", target: intentTarget };
+    if (outcome.ok) {
+      // Locking on is the Marksman's whole telegraph turn. The next enemy turn
+      // is the earliest point at which this prepared shot may be fired.
+      enemy.ap = 0;
+      return { kind: "aim", target: intentTarget };
+    }
   }
 
   if (intent.kind === "suppress" && intentTarget) {
@@ -649,6 +694,25 @@ export function takeEnemyAction(
   }
   if (!target) return { kind: "wait" };
   session.turnTargets.set(enemy.id, target.id);
+
+  // A prepared Marksman shot is resolved against its named lock before the
+  // ordinary target-selection code gets a chance to compare other operators.
+  // The whole firing turn is committed to that telegraphed shot, preserving the
+  // one-lock/one-shot cadence and preventing a surprise follow-up attack.
+  if (enemy.aiBehavior === "marksman" && isAimed(enemy)) {
+    const locked = marksmanLockedTarget(map, enemy);
+    if (!locked || enemy.ap < SHOOT_AP_COST) return { kind: "wait" };
+    enemy.ap -= SHOOT_AP_COST;
+    const result = resolveShot(map, enemy, locked, rng);
+    if (!result.canShoot) {
+      enemy.ap += SHOOT_AP_COST;
+      setAimed(enemy, false);
+      return { kind: "wait" };
+    }
+    enemy.ap = 0;
+    session.turnTargets.set(enemy.id, locked.id);
+    return { kind: "shoot", target: locked, result };
+  }
 
   // Re-check shoot now using current LoS and current AP.
   if (enemy.ap >= SHOOT_AP_COST) {
@@ -716,6 +780,11 @@ export function takeEnemyAction(
     const outcome = performAction(map, enemy, "hunker");
     if (outcome.ok) return { kind: "hunker" };
   }
+
+  // HOLDING is a player-facing promise about position. Defensive actions
+  // such as Hunker above may reinforce that tile, but the executor must never
+  // fall through into a secret fallback move after publishing HOLDING.
+  if (intent.kind === "hold") return { kind: "wait" };
 
   // A unit that has committed to watching a lane stays on it. Without this the
   // fallback route below would walk a sentinel straight off the position it

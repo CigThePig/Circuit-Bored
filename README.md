@@ -63,9 +63,9 @@ per action.
 | --- | --- | --- | --- |
 | Shoot | 2 | Hostile | The ordinary attack, bound to tapping a hostile. |
 | Aim | 1 | Self | The next shot gains accuracy. Cancelled by moving, spent by firing, gone at your next turn. |
-| Hunker | 1 | Self | Deepens adjacent cover until your next turn and drops your lean. Nearly worthless in the open. |
+| Hunker | 1 | Self | Deepens adjacent cover until your next turn and drops your lean. Moving cancels it. Nearly worthless in the open. |
 | Suppress | 2 | Hostile | No damage. The target loses accuracy and an action point on its next turn, cannot prepare shots, and any overwatch it holds is broken. |
-| Overwatch | 2 | Self | One reaction shot at the first hostile that moves through ground you can shoot into. Remaining AP is kept. |
+| Overwatch | 2 | Self | One reaction shot at the first hostile that moves through ground you can shoot into. Remaining AP is kept; moving cancels it. |
 
 Two positional rules give manoeuvre a payoff beyond restoring accuracy. A
 target is **Exposed** - worth extra accuracy and a point of damage - when it is
