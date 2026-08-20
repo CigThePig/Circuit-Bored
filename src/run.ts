@@ -4,6 +4,7 @@ import {
   buildCombatProfile,
   getUpgrade,
   isUpgradeId,
+  maxApWithUpgrades,
   recoveryHealing,
   postCombatHealing,
   stackCount,
@@ -162,10 +163,27 @@ const ROLE_UPGRADE_REQUIREMENTS: Partial<
   shield_projector: "bulwark",
 };
 
-function upgradeHasLivingUser(run: RunState, id: UpgradeId): boolean {
+function hasFutureRouteNode(run: RunState, kind: RouteNodeKind): boolean {
+  // Rewards are rolled after the current depth's node has already been chosen.
+  // The unchosen sibling at this same depth is no longer reachable, so only
+  // later depth layers can consume a future-only upgrade.
+  return run.route
+    .slice(run.depth + 1)
+    .some((layer) => layer.some((node) => node.kind === kind));
+}
+
+function upgradeHasFutureConsumer(run: RunState, id: UpgradeId): boolean {
   const required = ROLE_UPGRADE_REQUIREMENTS[id];
-  if (!required) return true;
-  return run.squad.some((member) => member.archetypeId === required && member.hp > 0);
+  if (
+    required &&
+    !run.squad.some((member) => member.archetypeId === required && member.hp > 0)
+  ) {
+    return false;
+  }
+  if (id === "triage_protocol" && !hasFutureRouteNode(run, "recovery")) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -191,7 +209,7 @@ function generateRewards(run: RunState, count: number): UpgradeId[] {
   const eligible = UPGRADES.filter(
     (upgrade) =>
       stackCount(run.upgrades, upgrade.id) < upgrade.maxStacks &&
-      upgradeHasLivingUser(run, upgrade.id),
+      upgradeHasFutureConsumer(run, upgrade.id),
   );
   if (eligible.length === 0) return [];
 
@@ -448,8 +466,7 @@ function canonicalPlayerMaxAp(
   member: EncounterSquadMember,
   upgrades: readonly UpgradeId[],
 ): number {
-  const delta = upgrades.reduce((sum, id) => sum + (getUpgrade(id).maxAp ?? 0), 0);
-  return Math.max(1, member.baseMaxAp + delta);
+  return maxApWithUpgrades(member.baseMaxAp, upgrades);
 }
 
 function activeMapStructureIsValid(rawMap: unknown): rawMap is GameMap {

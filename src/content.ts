@@ -262,6 +262,28 @@ export function stackCount(upgrades: readonly UpgradeId[], id: UpgradeId): numbe
   return upgrades.filter((upgrade) => upgrade === id).length;
 }
 
+function maxStatWithUpgrades(
+  base: number,
+  upgradeIds: readonly UpgradeId[],
+  key: "maxHp" | "maxAp",
+): number {
+  const delta = upgradeIds.reduce(
+    (sum, upgradeId) => sum + (getUpgrade(upgradeId)[key] ?? 0),
+    0,
+  );
+  return Math.max(1, base + delta);
+}
+
+/** Canonical maximum HP after every installed upgrade has been applied once. */
+export function maxHpWithUpgrades(baseMaxHp: number, upgradeIds: readonly UpgradeId[]): number {
+  return maxStatWithUpgrades(baseMaxHp, upgradeIds, "maxHp");
+}
+
+/** Canonical maximum AP after every installed upgrade has been applied once. */
+export function maxApWithUpgrades(baseMaxAp: number, upgradeIds: readonly UpgradeId[]): number {
+  return maxStatWithUpgrades(baseMaxAp, upgradeIds, "maxAp");
+}
+
 export function buildCombatProfile(
   archetypeId: UnitArchetypeId,
   upgradeIds: readonly UpgradeId[] = [],
@@ -291,10 +313,8 @@ export function makeArchetypeUnit(
   upgradeIds: readonly UpgradeId[] = [],
 ): Unit {
   const archetype = UNIT_ARCHETYPES[archetypeId];
-  const maxHpDelta = upgradeIds.reduce((sum, upgradeId) => sum + (getUpgrade(upgradeId).maxHp ?? 0), 0);
-  const maxApDelta = upgradeIds.reduce((sum, upgradeId) => sum + (getUpgrade(upgradeId).maxAp ?? 0), 0);
-  const maxHp = Math.max(1, archetype.maxHp + maxHpDelta);
-  const maxAp = Math.max(1, archetype.maxAp + maxApDelta);
+  const maxHp = maxHpWithUpgrades(archetype.maxHp, upgradeIds);
+  const maxAp = maxApWithUpgrades(archetype.maxAp, upgradeIds);
   return {
     id,
     team: archetype.team,
