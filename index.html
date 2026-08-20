@@ -453,6 +453,157 @@
         border-color: var(--cyan);
         color: var(--cyan);
       }
+      /*
+       * The manual's entry point. A circle beside the mode toggle: it is the
+       * one control in the top bar that is not about the current screen, so it
+       * deliberately does not look like the others.
+       */
+      .icon-button {
+        flex: 0 0 auto;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: 0;
+        color: var(--cyan);
+        border-color: var(--cyan-soft);
+      }
+      .icon-button[aria-expanded="true"] {
+        border-color: var(--cyan);
+        box-shadow: inset 0 0 10px var(--cyan-glow);
+      }
+      /*
+       * The manual sits over the whole app rather than replacing a screen, so
+       * a player can read about a hostile and come back to the same board with
+       * the same operator selected.
+       */
+      /* On a short phone the manual's own chrome is competing with the text
+         it exists to show, so the kicker goes and the heading shrinks. */
+      @media (max-height: 640px) {
+        .help-head { padding: 8px 12px 7px; }
+        .help-head .screen-kicker { display: none; }
+        .help-title { font-size: 16px; }
+        .help-close { min-height: 30px; }
+        .help-tabs { padding: 7px 12px; }
+      }
+      .help-inline { margin-top: 11px; }
+      .help-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px 10px;
+        background: rgba(3, 6, 10, 0.82);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+      }
+      .help-dialog {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-width: 480px;
+        /* A constant height rather than one that follows the content: the tab
+           strip has to stay under the player's thumb while they move between
+           tabs, and a dialog that resized around each panel moved it. */
+        height: 100%;
+        max-height: 720px;
+        border: 1px solid var(--cyan-soft);
+        background: linear-gradient(180deg, rgba(19, 24, 32, 0.98), rgba(9, 12, 17, 0.99));
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 24px 70px rgba(0, 0, 0, 0.6);
+      }
+      .help-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px 12px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .help-title {
+        margin: 2px 0 0;
+        flex: 1;
+        font-size: 20px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .help-head > div { flex: 1; }
+      .help-close {
+        flex: 0 0 auto;
+        min-width: 34px;
+        min-height: 34px;
+        padding: 0;
+        font-size: 13px;
+      }
+      /* Wraps onto two rows on a phone rather than scrolling sideways, so no
+         tab can hide off the edge of the strip. */
+      .help-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.22);
+      }
+      .help-tab {
+        padding: 6px 9px;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+      }
+      .help-tab.active {
+        border-color: var(--cyan);
+        color: var(--cyan);
+        box-shadow: inset 0 0 10px var(--cyan-glow);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .help-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 12px;
+      }
+      .help-summary {
+        margin: 0 0 12px;
+        color: var(--cyan);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .help-entry {
+        padding: 9px 0;
+        border-top: 1px solid var(--line);
+      }
+      .help-entry:first-of-type { border-top: 0; padding-top: 0; }
+      .help-term {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .help-meta {
+        color: var(--amber);
+        font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.06em;
+        text-transform: none;
+      }
+      .help-detail {
+        margin: 5px 0 0;
+        color: var(--text-dim);
+        font-size: 12px;
+        line-height: 1.55;
+      }
       .hidden { display: none !important; }
     </style>
   </head>
@@ -462,6 +613,7 @@
         <div class="mode" id="mode-label">Editor</div>
         <div id="seed-label"></div>
         <button id="screenshot">Shot</button>
+        <button id="help" class="icon-button" aria-label="How this works" title="How this works" aria-haspopup="dialog">?</button>
         <button id="mode-toggle">Title</button>
       </div>
       <main id="screen"></main>

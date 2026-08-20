@@ -1,5 +1,6 @@
 import { getUpgrade } from "./content.ts";
 import { startEditor, type EditorHandle } from "./editor.ts";
+import { mountHelp } from "./help.ts";
 import { createTestMap, loadMap, type GameMap } from "./map.ts";
 import { randomSeed } from "./rng.ts";
 import {
@@ -39,6 +40,11 @@ const modeLabel = requireElement<HTMLElement>("mode-label");
 const seedLabel = requireElement<HTMLElement>("seed-label");
 const modeToggle = requireElement<HTMLButtonElement>("mode-toggle");
 const screenshotButton = requireElement<HTMLButtonElement>("screenshot");
+const helpButton = requireElement<HTMLButtonElement>("help");
+
+// The manual is mounted once and lives above every screen, so it is reachable
+// mid-turn without unwinding whatever the player was in the middle of.
+const help = mountHelp(helpButton);
 
 type AppMode = "screen" | "editor" | "sandbox" | "encounter";
 let mode: AppMode = "screen";
@@ -192,6 +198,9 @@ function renderTitle(): void {
   const explainer = panel();
   explainer.innerHTML = "<h3>FAST. TACTICAL. PERSISTENT.</h3>";
   explainer.appendChild(copy("Choose a signal, clear the board, install one upgrade, and keep your surviving operators alive until the Core Breach."));
+  // The icon is in the top bar on every screen, but a first run has no reason
+  // to look there yet.
+  explainer.appendChild(button("How This Works", "help-inline", () => help.open()));
   screen.appendChild(explainer);
 }
 
