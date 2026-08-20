@@ -126,6 +126,21 @@ the AI takes is one the player's own action pipeline would allow, and the only
 one-way firing lines are corner peeks - which the shooter pays for by committing
 to a silhouette its target can shoot back at.
 
+## Field manual
+
+The question mark in the top bar opens an in-game manual, available on every
+screen and over a live board — reading it mid-turn costs nothing and leaves the
+selected operator and any armed action exactly as they were.
+
+Its content is not hand-written prose about the game. `src/help.ts` builds each
+section from the module that owns the rule: action names, costs, and
+descriptions come from the registry in `src/actions.ts`, unit statistics and
+counters from `UNIT_ARCHETYPES`, band edges from `src/range.ts`, the movement
+rate from `src/rules.ts`, the route length from `generateRoute`, and the
+accuracy swings from `src/combat.ts`. Retuning a constant retunes the manual in
+the same commit, and `tests/help.test.ts` fails if an action, an archetype, or a
+HUD status code exists that the manual does not explain.
+
 ## Run loop
 
 A run is a deterministic seven-node route. Players choose between standard and
@@ -165,6 +180,8 @@ format.
   lifecycle transitions, and save validation.
 - `src/main.ts` presents title, route, reward, recovery, outcome, encounter,
   and developer-editor screens without owning game rules.
+- `src/help.ts` derives the in-game field manual from those rule modules and
+  mounts it as a modal over whatever screen is showing.
 
 The map editor remains available from the title screen as a development tool.
 
