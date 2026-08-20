@@ -178,7 +178,12 @@ export function startRuntime(
    * The rule layer already produces a sentence for every refusal; without
    * this the player taps a hostile, nothing happens, and the only available
    * conclusion is that the game let the enemy take a shot it will not let
-   * them take. Cleared by the next tap, so it never outlives its cause.
+   * them take.
+   *
+   * It answers one tap and nothing after it, so every entry point the player
+   * can act through - the board, the action tray, Intel, ending the turn -
+   * clears it on the way in. A sentence about a tap two actions ago is worse
+   * than no sentence at all.
    */
   let refusal: string | null = null;
 
@@ -221,6 +226,7 @@ export function startRuntime(
   intelBtn.title =
     "Intel — free\nTarget: a hostile.\nRead its role, its weakness, and what it is planning.";
   intelBtn.addEventListener("click", () => {
+    refusal = null;
     intelMode = !intelMode;
     if (intelMode) pendingAction = null;
     else inspected = null;
@@ -589,6 +595,14 @@ export function startRuntime(
         `${action.name} armed (${action.apCost} AP). Tap a highlighted ${who}, or tap ${action.shortLabel} again to cancel.`;
       return;
     }
+    // A refusal answers something the player just did, so it outranks the
+    // standing status hint below it. A suppressed operator may still shoot,
+    // and telling it only that it is suppressed when the real answer was "no
+    // firing line" is the silence this message exists to break.
+    if (refusal) {
+      hintLabel.textContent = refusal;
+      return;
+    }
     if (isSuppressed(unit)) {
       hintLabel.textContent =
         "Suppressed: reduced accuracy and one fewer action point. Cannot aim, suppress, or set overwatch.";
@@ -597,10 +611,6 @@ export function startRuntime(
     // While a shot is on the table, say which band it is at and how this
     // operator's weapon feels about that. Range only matters if the player can
     // see it, and this is the moment it matters.
-    if (refusal) {
-      hintLabel.textContent = refusal;
-      return;
-    }
     const shotNote = bestShotNote(unit);
     hintLabel.textContent = unit.ap >= SHOOT_AP_COST
       ? `Tap a hostile to shoot (${SHOOT_AP_COST} AP), tap ground to move, or choose an action.${shotNote}`
@@ -632,6 +642,7 @@ export function startRuntime(
   const onActionButton = (id: ActionId) => {
     if (turn !== "player" || outcome !== null || busy) return;
     if (!selected || selected.team !== "player" || selected.hp <= 0) return;
+    refusal = null;
     if (pendingAction === id) {
       pendingAction = null;
       redraw();
@@ -649,6 +660,7 @@ export function startRuntime(
     pendingAction = null;
     const outcomeResult = performAction(map, selected, id, null, random);
     if (!outcomeResult.ok) {
+      refusal = `${action.name} refused: ${outcomeResult.reason}`;
       redraw();
       return;
     }
@@ -1136,6 +1148,7 @@ export function startRuntime(
 
   endTurnBtn.addEventListener("click", () => {
     if (turn !== "player" || outcome !== null || busy) return;
+    refusal = null;
     turn = "enemy";
     // Statuses whose duration is counted in the owner's turns expire when that
     // turn actually ends, so a suppression applied to the enemy on this turn
