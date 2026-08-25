@@ -305,7 +305,10 @@ export function validateMap(map: GameMap): ValidationReport {
         { unitId: u.id },
       );
     }
-    if (!isValidIntent(u.intent)) {
+    const intentOutOfBounds = u.intent?.at !== null && u.intent?.at !== undefined && (
+      u.intent.at.x >= map.width || u.intent.at.y >= map.height
+    );
+    if (!isValidIntent(u.intent) || intentOutOfBounds) {
       pushError(
         issues,
         "INVALID_UNIT_INTENT",

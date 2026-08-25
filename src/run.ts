@@ -5,6 +5,7 @@ import {
   getUpgrade,
   isUpgradeId,
   maxApWithUpgrades,
+  maxHpWithUpgrades,
   recoveryHealing,
   postCombatHealing,
   stackCount,
@@ -17,6 +18,7 @@ import {
   type EncounterSquadMember,
 } from "./generation.ts";
 import { cloneMap, type GameMap } from "./map.ts";
+import { validCommittedExposure } from "./combat.ts";
 import { SeededRng } from "./rng.ts";
 import { sanitizeLoadedMap, validateMap } from "./validation.ts";
 
@@ -82,6 +84,16 @@ const nodeText: Record<RouteNodeKind, { title: string; description: string }> = 
   final: { title: "Core Breach", description: "The run's final, most dangerous encounter." },
 };
 
+/** Persistent identities and roles of the fixed starting squad. */
+const INITIAL_SQUAD: readonly {
+  id: string;
+  archetypeId: EncounterSquadMember["archetypeId"];
+}[] = [
+  { id: "squad-rook", archetypeId: "operator" },
+  { id: "squad-vex", archetypeId: "runner" },
+  { id: "squad-hex", archetypeId: "bulwark" },
+];
+
 function makeNode(depth: number, slot: number, kind: RouteNodeKind): RouteNode {
   return {
     id: `node-${depth}-${slot}-${kind}`,
@@ -133,11 +145,7 @@ export function createRun(seed: string): RunState {
     route,
     chosenNodeIds: [],
     currentNodeId: null,
-    squad: [
-      initialSquadMember("squad-rook", "operator"),
-      initialSquadMember("squad-vex", "runner"),
-      initialSquadMember("squad-hex", "bulwark"),
-    ],
+    squad: INITIAL_SQUAD.map(({ id, archetypeId }) => initialSquadMember(id, archetypeId)),
     upgrades: [],
     pendingRewards: [],
     activeEncounter: null,
@@ -447,24 +455,57 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validArchetype(value: unknown): value is EncounterSquadMember["archetypeId"] {
-  return value === "operator" || value === "runner" || value === "bulwark";
+function validSquadMaxHp(
+  maxHp: number,
+  hp: number,
+  archetypeId: EncounterSquadMember["archetypeId"],
+  upgrades: readonly UpgradeId[],
+): boolean {
+  const base = UNIT_ARCHETYPES[archetypeId].maxHp;
+  if (hp > 0) return maxHp === maxHpWithUpgrades(base, upgrades);
+
+  // Dead operators do not receive later maximum-HP upgrades. Their stored
+  // ceiling must therefore be one the ordered upgrade history actually
+  // produced at some point before or when they were lost.
+  let historical = base;
+  if (maxHp === historical) return true;
+  for (const id of upgrades) {
+    historical = Math.max(1, historical + (getUpgrade(id).maxHp ?? 0));
+    if (maxHp === historical) return true;
+  }
+  return false;
 }
 
-function sanitizeSquad(value: unknown): EncounterSquadMember[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 3) return null;
-  const seen = new Set<string>();
+function sanitizeSquad(
+  value: unknown,
+  upgrades: readonly UpgradeId[],
+): EncounterSquadMember[] | null {
+  if (!Array.isArray(value) || value.length !== INITIAL_SQUAD.length) return null;
   const squad: EncounterSquadMember[] = [];
-  for (const raw of value) {
-    if (!isObject(raw) || typeof raw.id !== "string" || seen.has(raw.id)) return null;
-    if (typeof raw.name !== "string" || !validArchetype(raw.archetypeId)) return null;
+  for (let index = 0; index < value.length; index++) {
+    const raw = value[index];
+    const identity = INITIAL_SQUAD[index];
+    if (!isObject(raw) || raw.id !== identity.id || raw.archetypeId !== identity.archetypeId) return null;
+    if (raw.name !== UNIT_ARCHETYPES[identity.archetypeId].name) return null;
     if (!Number.isInteger(raw.hp) || !Number.isInteger(raw.maxHp) || !Number.isInteger(raw.baseMaxAp)) return null;
     const hp = raw.hp as number;
     const maxHp = raw.maxHp as number;
     const baseMaxAp = raw.baseMaxAp as number;
-    if (maxHp < 1 || maxHp > 100 || hp < 0 || hp > maxHp || baseMaxAp < 1 || baseMaxAp > 20) return null;
-    seen.add(raw.id);
-    squad.push({ id: raw.id, name: raw.name, archetypeId: raw.archetypeId, hp, maxHp, baseMaxAp });
+    if (
+      hp < 0 || hp > maxHp ||
+      baseMaxAp !== UNIT_ARCHETYPES[identity.archetypeId].maxAp ||
+      !validSquadMaxHp(maxHp, hp, identity.archetypeId, upgrades)
+    ) {
+      return null;
+    }
+    squad.push({
+      id: identity.id,
+      name: UNIT_ARCHETYPES[identity.archetypeId].name,
+      archetypeId: identity.archetypeId,
+      hp,
+      maxHp,
+      baseMaxAp,
+    });
   }
   return squad;
 }
@@ -478,6 +519,24 @@ function sanitizeUpgrades(value: unknown): UpgradeId[] | null {
     out.push(id);
   }
   return out;
+}
+
+function sanitizeStats(value: unknown): RunStats | null {
+  if (!isObject(value)) return null;
+  const read = (key: keyof RunStats): number | null => {
+    const candidate = value[key];
+    return Number.isInteger(candidate) && (candidate as number) >= 0 && (candidate as number) < 10000
+      ? candidate as number
+      : null;
+  };
+  const stats = {
+    combatsWon: read("combatsWon"),
+    elitesWon: read("elitesWon"),
+    unitsLost: read("unitsLost"),
+    upgradesTaken: read("upgradesTaken"),
+  };
+  if (Object.values(stats).some((entry) => entry === null)) return null;
+  return stats as RunStats;
 }
 
 function canonicalPlayerMaxAp(
@@ -658,6 +717,7 @@ function rehydrateMap(
     } else {
       return null;
     }
+    if (unit.peekExposure && !validCommittedExposure(sanitized.map, unit)) return null;
   }
 
   return activeStatusesAreSemanticallyValid(sanitized.map) ? sanitized.map : null;
@@ -683,10 +743,11 @@ export function loadRunWithReport(): RunLoadResult {
   if (typeof raw.seed !== "string" || raw.seed.length === 0 || raw.seed.length > 80) {
     return { run: null, error: "The saved run has an invalid seed." };
   }
-  const squad = sanitizeSquad(raw.squad);
   const upgrades = sanitizeUpgrades(raw.upgrades);
+  const squad = upgrades ? sanitizeSquad(raw.squad, upgrades) : null;
+  const stats = sanitizeStats(raw.stats);
   const statuses: RunStatus[] = ["route", "encounter", "reward", "recovery", "victory", "defeat"];
-  if (!squad || !upgrades || !statuses.includes(raw.status as RunStatus)) {
+  if (!squad || !upgrades || !stats || !statuses.includes(raw.status as RunStatus)) {
     return { run: null, error: "The saved run failed validation." };
   }
   if (!Number.isInteger(raw.rngState) || (raw.rngState as number) < 0 || (raw.rngState as number) > 0xffffffff) {
@@ -696,6 +757,11 @@ export function loadRunWithReport(): RunLoadResult {
   if (!Number.isInteger(raw.depth) || (raw.depth as number) < 0 || (raw.depth as number) > route.length) {
     return { run: null, error: "The saved run has invalid route progress." };
   }
+  const depth = raw.depth as number;
+  const status = raw.status as RunStatus;
+  if ((status === "victory") !== (depth === route.length)) {
+    return { run: null, error: "The saved run has an impossible completion state." };
+  }
   const nodeIds = new Set(route.flat().map((node) => node.id));
   const currentNodeId = raw.currentNodeId === null
     ? null
@@ -703,36 +769,87 @@ export function loadRunWithReport(): RunLoadResult {
       ? raw.currentNodeId
       : undefined;
   if (currentNodeId === undefined) return { run: null, error: "The saved run references an invalid node." };
-  const chosenNodeIds = Array.isArray(raw.chosenNodeIds)
-    ? raw.chosenNodeIds.filter((id): id is string => typeof id === "string" && nodeIds.has(id))
-    : [];
-  const pendingRewards = Array.isArray(raw.pendingRewards)
-    ? raw.pendingRewards.filter(isUpgradeId)
-    : [];
-  const rawRewardCount = Array.isArray(raw.pendingRewards) ? raw.pendingRewards.length : -1;
+  if (!Array.isArray(raw.chosenNodeIds) || raw.chosenNodeIds.length !== depth) {
+    return { run: null, error: "The saved route history failed validation." };
+  }
+  const chosenNodeIds: string[] = [];
+  for (let completedDepth = 0; completedDepth < depth; completedDepth++) {
+    const id = raw.chosenNodeIds[completedDepth];
+    if (typeof id !== "string" || !route[completedDepth]?.some((node) => node.id === id)) {
+      return { run: null, error: "The saved route history failed validation." };
+    }
+    chosenNodeIds.push(id);
+  }
+  const completedNodes = chosenNodeIds.map((id) =>
+    route.flat().find((node) => node.id === id)!
+  );
+  const selectedNode = currentNodeId
+    ? route.flat().find((node) => node.id === currentNodeId) ?? null
+    : null;
+  const expectsCurrentNode = status !== "route" && status !== "victory";
   if (
-    raw.status === "reward" && (
-      pendingRewards.length === 0 ||
-      pendingRewards.length !== rawRewardCount ||
+    (expectsCurrentNode && (!selectedNode || selectedNode.depth !== depth)) ||
+    (!expectsCurrentNode && selectedNode !== null)
+  ) {
+    return { run: null, error: "The saved run does not match its route depth." };
+  }
+  const combatNode = selectedNode?.kind === "combat" ||
+    selectedNode?.kind === "elite" || selectedNode?.kind === "final";
+  if (
+    ((status === "encounter" || status === "defeat") && !combatNode) ||
+    (status === "recovery" && selectedNode?.kind !== "recovery") ||
+    (status === "reward" && (
+      selectedNode === null || selectedNode.kind === "recovery" || selectedNode.kind === "final"
+    ))
+  ) {
+    return { run: null, error: "The saved run has an invalid node transition." };
+  }
+  const wonCurrentCombat = status === "reward" &&
+    (selectedNode?.kind === "combat" || selectedNode?.kind === "elite");
+  const expectedCombatsWon = completedNodes.filter((node) =>
+    node.kind === "combat" || node.kind === "elite" || node.kind === "final"
+  ).length + (wonCurrentCombat ? 1 : 0);
+  const expectedElitesWon = completedNodes.filter((node) => node.kind === "elite").length +
+    (status === "reward" && selectedNode?.kind === "elite" ? 1 : 0);
+  const expectedUpgrades = completedNodes.filter((node) =>
+    node.kind === "combat" || node.kind === "elite" || node.kind === "cache"
+  ).length;
+  if (
+    upgrades.length !== expectedUpgrades ||
+    stats.upgradesTaken !== upgrades.length ||
+    stats.combatsWon !== expectedCombatsWon ||
+    stats.elitesWon !== expectedElitesWon ||
+    stats.unitsLost !== squad.filter((member) => member.hp <= 0).length
+  ) {
+    return { run: null, error: "The saved run statistics do not match its progression." };
+  }
+  if (!Array.isArray(raw.pendingRewards) || !raw.pendingRewards.every(isUpgradeId)) {
+    return { run: null, error: "The saved reward choices failed validation." };
+  }
+  const pendingRewards = raw.pendingRewards as UpgradeId[];
+  const expectedRewardCount = selectedNode?.kind === "elite" ? 4 : 3;
+  if (
+    (status !== "reward" && pendingRewards.length > 0) ||
+    (status === "reward" && (
+      pendingRewards.length !== expectedRewardCount ||
       new Set(pendingRewards).size !== pendingRewards.length ||
       pendingRewards.some((id) => stackCount(upgrades, id) >= getUpgrade(id).maxStacks)
-    )
+    ))
   ) {
     return { run: null, error: "The saved reward choices failed validation." };
   }
-  const rawStats = isObject(raw.stats) ? raw.stats : {};
-  const stat = (key: keyof RunStats): number => {
-    const value = rawStats[key];
-    return Number.isInteger(value) && (value as number) >= 0 && (value as number) < 10000 ? value as number : 0;
-  };
   let activeEncounter: ActiveEncounter | null = null;
-  if (raw.status === "encounter") {
+  if (status === "encounter") {
     if (!isObject(raw.activeEncounter) || typeof raw.activeEncounter.nodeId !== "string") {
       return { run: null, error: "The active encounter save is incomplete." };
     }
     const rawEncounter = raw.activeEncounter;
     const node = route.flat().find((candidate) => candidate.id === rawEncounter.nodeId);
-    if (!node || (node.kind !== "combat" && node.kind !== "elite" && node.kind !== "final")) {
+    if (
+      !node ||
+      (node.kind !== "combat" && node.kind !== "elite" && node.kind !== "final") ||
+      rawEncounter.kind !== node.kind
+    ) {
       return { run: null, error: "The active encounter references an invalid node." };
     }
     const map = rehydrateMap(rawEncounter.map, squad, upgrades);
@@ -749,26 +866,16 @@ export function loadRunWithReport(): RunLoadResult {
       map,
       turn: rawEncounter.turn,
     };
-  }
-  const selectedNode = currentNodeId
-    ? route.flat().find((node) => node.id === currentNodeId) ?? null
-    : null;
-  if (raw.status === "route" && selectedNode !== null) {
-    return { run: null, error: "The saved route has an unexpected active node." };
-  }
-  if (raw.status === "recovery" && selectedNode?.kind !== "recovery") {
-    return { run: null, error: "The saved recovery choice references the wrong node." };
-  }
-  if (raw.status === "reward" && selectedNode === null) {
-    return { run: null, error: "The saved reward has no source node." };
+  } else if (raw.activeEncounter !== null) {
+    return { run: null, error: "The saved run has an unexpected encounter snapshot." };
   }
   return {
     run: {
       version: RUN_SAVE_VERSION,
       seed: raw.seed,
       rngState: raw.rngState as number,
-      status: raw.status as RunStatus,
-      depth: raw.depth as number,
+      status,
+      depth,
       route,
       chosenNodeIds,
       currentNodeId,
@@ -776,12 +883,7 @@ export function loadRunWithReport(): RunLoadResult {
       upgrades,
       pendingRewards,
       activeEncounter,
-      stats: {
-        combatsWon: stat("combatsWon"),
-        elitesWon: stat("elitesWon"),
-        unitsLost: stat("unitsLost"),
-        upgradesTaken: stat("upgradesTaken"),
-      },
+      stats,
     },
     error: null,
   };

@@ -14,7 +14,6 @@ import {
   UNIT_ARCHETYPES,
   maxApWithUpgrades,
   type UnitArchetypeId,
-  type UpgradeId,
 } from "../src/content.ts";
 import {
   overwatchReactions,
@@ -51,17 +50,6 @@ import {
   updateActiveEncounter,
   type RunState,
 } from "../src/run.ts";
-
-const LIVE_UPGRADES: readonly UpgradeId[] = [
-  "auxiliary_cell",
-  "ghost_step",
-  "command_uplink",
-  "target_designator",
-  "sprint_servos",
-  "shield_projector",
-  "sustained_fire",
-  "steady_hands",
-];
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -363,6 +351,21 @@ function reloadAtStableBoundary(run: RunState): RunState {
   return loaded.run!;
 }
 
+/** Build a genuinely upgraded run so persistence is exercised on legal history. */
+function runWithEarnedUpgrades(seed: string): RunState {
+  const run = createRun(seed);
+  while (run.depth < 1) {
+    const combat = availableNodes(run).find((node) => node.kind === "combat")!;
+    enterNode(run, combat.id);
+    for (const enemy of run.activeEncounter!.map.units.filter((unit) => unit.team === "enemy")) {
+      enemy.hp = 0;
+    }
+    completeEncounter(run, "victory", run.activeEncounter!.map);
+    chooseUpgrade(run, run.pendingRewards[0]);
+  }
+  return run;
+}
+
 function playLiveEncounter(start: RunState, maxRounds = 32): { run: RunState; rounds: number } {
   let run = start;
   if (!run.activeEncounter) throw new Error("Expected active encounter");
@@ -440,9 +443,9 @@ describe("live tactical integration simulation", () => {
     let totalRounds = 0;
 
     for (let seed = 0; seed < 12; seed++) {
-      let run = createRun(`LIVE-${seed}`);
-      run.upgrades.push(...LIVE_UPGRADES);
-      enterNode(run, availableNodes(run)[0].id);
+      let run = runWithEarnedUpgrades(`LIVE-${seed}`);
+      expect(run.upgrades).toHaveLength(1);
+      enterNode(run, availableNodes(run).find((node) => node.kind === "combat")!.id);
       const played = playLiveEncounter(run);
       run = played.run;
       totalRounds += played.rounds;

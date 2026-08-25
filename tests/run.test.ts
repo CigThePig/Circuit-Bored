@@ -37,6 +37,14 @@ function enterFirstCombat(seed = "RUN-TEST") {
   return run;
 }
 
+function roundTrip(run: ReturnType<typeof createRun>) {
+  expect(saveRun(run)).toBe(true);
+  const loaded = loadRunWithReport();
+  expect(loaded.error).toBeNull();
+  expect(loaded.run).not.toBeNull();
+  return loaded.run!;
+}
+
 describe("route generation", () => {
   it("is deterministic, branched, and always reaches a final encounter", () => {
     const a = generateRoute(new SeededRng("ROUTE"));
@@ -138,6 +146,52 @@ describe("run lifecycle", () => {
 });
 
 describe("run persistence", () => {
+  it("accepts every legitimate progression boundary through a complete run", () => {
+    let run = roundTrip(createRun("PROGRESSION-BOUNDARIES"));
+
+    while (run.status !== "victory") {
+      if (run.status === "route") {
+        const preferred = availableNodes(run).find((node) =>
+          (run.depth === 2 && node.kind === "recovery") ||
+          (run.depth === 4 && node.kind === "cache")
+        ) ?? availableNodes(run)[0];
+        enterNode(run, preferred.id);
+        run = roundTrip(run);
+        continue;
+      }
+      if (run.status === "encounter") {
+        for (const enemy of run.activeEncounter!.map.units.filter((unit) => unit.team === "enemy")) {
+          enemy.hp = 0;
+        }
+        completeEncounter(run, "victory", run.activeEncounter!.map);
+        run = roundTrip(run);
+        continue;
+      }
+      if (run.status === "reward") {
+        chooseUpgrade(run, run.pendingRewards[0]);
+        run = roundTrip(run);
+        continue;
+      }
+      if (run.status === "recovery") {
+        chooseRecovery(run, run.squad.find((member) => member.hp > 0)!.id);
+        run = roundTrip(run);
+        continue;
+      }
+      throw new Error(`Unexpected run state '${run.status}'`);
+    }
+
+    expect(run.depth).toBe(run.route.length);
+    expect(run.chosenNodeIds).toHaveLength(run.route.length);
+
+    let defeated = enterFirstCombat("DEFEAT-BOUNDARY");
+    for (const player of defeated.activeEncounter!.map.units.filter((unit) => unit.team === "player")) {
+      player.hp = 0;
+    }
+    completeEncounter(defeated, "defeat", defeated.activeEncounter!.map);
+    defeated = roundTrip(defeated);
+    expect(defeated.status).toBe("defeat");
+  });
+
   it("round-trips an active encounter including turn and tactical state", () => {
     const run = enterFirstCombat("SAVE-ME");
     const map = run.activeEncounter!.map;
@@ -145,7 +199,6 @@ describe("run persistence", () => {
     player.hp -= 3;
     player.x += 1;
     player.ap = 1;
-    player.peekExposure = { x: player.x, y: player.y + 1 };
     updateActiveEncounter(run, map, "enemy");
     expect(saveRun(run)).toBe(true);
     const loaded = loadRunWithReport();
@@ -153,7 +206,7 @@ describe("run persistence", () => {
     expect(loaded.run?.activeEncounter?.turn).toBe("enemy");
     expect(loaded.run?.activeEncounter?.map.themeId).toBe(map.themeId);
     expect(loaded.run?.activeEncounter?.map.units.find((unit) => unit.id === player.id))
-      .toMatchObject({ hp: player.hp, x: player.x, ap: 1, peekExposure: player.peekExposure });
+      .toMatchObject({ hp: player.hp, x: player.x, ap: 1, peekExposure: null });
   });
 
   it("loads version-one encounter saves created before theme metadata existed", () => {
