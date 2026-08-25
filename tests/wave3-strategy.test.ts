@@ -6,6 +6,7 @@ import {
   takeEnemyAction,
 } from "../src/ai.ts";
 import { performAction } from "../src/actions.ts";
+import { canShootTarget, checkOverwatch } from "../src/combat.ts";
 import {
   UNIT_ARCHETYPES,
   getUpgrade,
@@ -88,6 +89,35 @@ describe("Wave 3 range-aware AI", () => {
     expect(action.kind).toBe("shoot");
     if (action.kind === "shoot") expect(action.result.usedAim).toBe(true);
     expect(enemy.ap).toBe(1);
+  });
+
+  it("does not call a range-improving route safe when an intermediate step is watched", () => {
+    const map = buildMap([
+      "..#....h",
+      ".....#.#",
+      "........",
+      "..h....#",
+      "........",
+      ".......h",
+      "...#....",
+      "h.......",
+    ]);
+    const enemy = makeArchetypeUnit("scrapper", "enemy", 2, 4);
+    const target = makeArchetypeUnit("operator", "target", 7, 7);
+    const watcher = makeArchetypeUnit("operator", "watcher", 0, 0);
+    watcher.overwatch = true;
+    map.units.push(enemy, target, watcher);
+    expect(canShootTarget(map, enemy, target).canShoot).toBe(true);
+    const session = createAiSession();
+
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+
+    if (action.kind === "move") {
+      expect(checkOverwatch(map, watcher, enemy, action.from, action.to).fires).toBe(false);
+    } else {
+      expect(action.kind).toBe("shoot");
+    }
   });
 });
 

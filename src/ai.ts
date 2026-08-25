@@ -22,6 +22,7 @@ import {
   shotHitPenalty,
   targetCoverPenalty,
   watchedTiles,
+  type ShotPreview,
   type ShotResult,
 } from "./combat.ts";
 import {
@@ -52,7 +53,7 @@ export type AiAction =
   | { kind: "overwatch" }
   | { kind: "hunker" }
   | { kind: "aim"; target: Unit }
-  | { kind: "suppress"; target: Unit }
+  | { kind: "suppress"; target: Unit; shot: ShotPreview }
   | { kind: "wait" };
 
 export { SHOOT_AP_COST };
@@ -548,14 +549,18 @@ function bestRangeDestination(
   const wanted = preferredBand(enemy.combat);
   const idealDistance = bandTargetDistance(wanted);
   const currentGap = Math.abs(tileDistance(enemy, target) - idealDistance);
-  const candidates = reachableTiles(map, enemy).filter((candidate) =>
+  const reachable = reachableTiles(map, enemy);
+  const candidates = reachable.filter((candidate) =>
     candidate.steps > 0 &&
     Math.abs(tileDistance(candidate, target) - idealDistance) < currentGap
   );
   if (candidates.length === 0) return null;
 
   const routeDistances = routeDistanceField(map, target, enemy);
-  const coverage = buildOverwatchCoverage(map, enemy, candidates);
+  // A route can cross a watched tile that is not itself a better endpoint.
+  // Coverage therefore has to include every reachable path step, not only the
+  // filtered destinations whose range gap improved.
+  const coverage = buildOverwatchCoverage(map, enemy, reachable);
   let best: PlannedDestination | null = null;
   let bestScore = -Infinity;
   for (const candidate of candidates) {
@@ -664,7 +669,9 @@ export function takeEnemyAction(
   }
   if (intent.kind === "suppress" && intentTarget) {
     const outcome = performAction(map, enemy, "suppress", intentTarget, rng);
-    if (outcome.ok) return { kind: "suppress", target: intentTarget };
+    if (outcome.ok && outcome.result.kind === "suppress") {
+      return { kind: "suppress", target: intentTarget, shot: outcome.result.shot };
+    }
   }
 
   let target: Unit | null = intentTarget;

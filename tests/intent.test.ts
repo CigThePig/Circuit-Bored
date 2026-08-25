@@ -73,6 +73,7 @@ describe("intent shape", () => {
     expect(isValidIntent(undefined)).toBe(true);
     expect(isValidIntent({ kind: "aim", targetId: null, at: null })).toBe(true);
     expect(isValidIntent({ kind: "nope", targetId: null, at: null })).toBe(false);
+    expect(isValidIntent({ kind: "close", targetId: null, at: { x: -1, y: 2 } })).toBe(false);
   });
 
   it("survives a clone and a save round trip", () => {
@@ -95,6 +96,14 @@ describe("intent shape", () => {
   it("rejects a malformed intent during validation", () => {
     const { map, enemy } = lane("rifleman");
     (enemy as { intent?: unknown }).intent = { kind: "wat", targetId: null, at: null };
+    const report = validateMap(map);
+    expect(report.hasErrors).toBe(true);
+    expect(report.issues.some((i) => i.code === "INVALID_UNIT_INTENT")).toBe(true);
+  });
+
+  it("rejects a stored intent destination outside its map", () => {
+    const { map, enemy } = lane("rifleman");
+    enemy.intent = makeIntent("close", "rook", { x: map.width, y: 1 });
     const report = validateMap(map);
     expect(report.hasErrors).toBe(true);
     expect(report.issues.some((i) => i.code === "INVALID_UNIT_INTENT")).toBe(true);

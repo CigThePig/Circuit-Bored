@@ -131,8 +131,8 @@ export function isValidIntent(raw: unknown): boolean {
   if (value.at !== null) {
     if (!value.at || typeof value.at !== "object" || Array.isArray(value.at)) return false;
     const point = value.at as Record<string, unknown>;
-    if (typeof point.x !== "number" || !Number.isInteger(point.x)) return false;
-    if (typeof point.y !== "number" || !Number.isInteger(point.y)) return false;
+    if (typeof point.x !== "number" || !Number.isInteger(point.x) || point.x < 0) return false;
+    if (typeof point.y !== "number" || !Number.isInteger(point.y) || point.y < 0) return false;
   }
   return true;
 }

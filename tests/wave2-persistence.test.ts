@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { cloneMap } from "../src/map.ts";
+import { getPeekPositions } from "../src/combat.ts";
 import { SeededRng } from "../src/rng.ts";
 import { setAimed } from "../src/status.ts";
 import {
@@ -110,6 +111,114 @@ describe("Wave 2 strict active snapshots", () => {
     );
     player.maxAp = 999999;
     player.ap = 500000;
+    store(raw);
+
+    expect(loadRunWithReport().run).toBeNull();
+  });
+
+  it("rejects forged squad ceilings that would redefine canonical HP and AP", () => {
+    const run = encounter("FORGED-SQUAD-STATS");
+    const raw = serialized(run);
+    const member = raw.squad[0];
+    const player = raw.activeEncounter.map.units.find(
+      (unit: { id: string }) => unit.id === member.id,
+    );
+    Object.assign(member, { hp: 100, maxHp: 100, baseMaxAp: 20 });
+    Object.assign(player, { hp: 100, maxHp: 100, ap: 20, maxAp: 20 });
+    store(raw);
+
+    expect(loadRunWithReport().run).toBeNull();
+  });
+
+  it("rejects an encounter node that does not belong to the saved route depth", () => {
+    const run = encounter("SKIPPED-ROUTE");
+    const raw = serialized(run);
+    const finalNode = raw.route.at(-1)[0];
+    raw.currentNodeId = finalNode.id;
+    raw.activeEncounter.nodeId = finalNode.id;
+    raw.activeEncounter.kind = "final";
+    store(raw);
+
+    expect(loadRunWithReport().run).toBeNull();
+  });
+
+  it("rejects duplicated or out-of-order route history instead of canonicalizing it", () => {
+    const run = createRun("FORGED-HISTORY");
+    const raw = serialized(run);
+    raw.depth = 2;
+    raw.chosenNodeIds = [raw.route[0][0].id, raw.route[0][0].id];
+    store(raw);
+
+    expect(loadRunWithReport().run).toBeNull();
+  });
+
+  it("rejects upgrades and statistics that were not earned by completed nodes", () => {
+    const raw = serialized(createRun("FORGED-PROGRESSION-VALUES"));
+    raw.upgrades = ["smartlink"];
+    raw.stats.upgradesTaken = 1;
+    raw.stats.combatsWon = 7;
+    store(raw);
+
+    expect(loadRunWithReport().run).toBeNull();
+  });
+
+  it("round-trips a geometrically legal committed peek exposure", () => {
+    const run = encounter("LEGAL-PEEK-SNAPSHOT");
+    const map = run.activeEncounter!.map;
+    const player = map.units.find((unit) => unit.team === "player")!;
+    const occupied = new Set(
+      map.units
+        .filter((unit) => unit.hp > 0 && unit.id !== player.id)
+        .map((unit) => `${unit.x},${unit.y}`),
+    );
+    let placement: { x: number; y: number; exposure: { x: number; y: number } } | null = null;
+    for (let y = 0; y < map.height && !placement; y++) {
+      for (let x = 0; x < map.width && !placement; x++) {
+        if (map.tiles[y * map.width + x] !== "floor" || occupied.has(`${x},${y}`)) continue;
+        const exposure = getPeekPositions(map, x, y).find((point) =>
+          map.tiles[point.y * map.width + point.x] === "floor" &&
+          !occupied.has(`${point.x},${point.y}`)
+        );
+        if (exposure) placement = { x, y, exposure };
+      }
+    }
+    expect(placement).not.toBeNull();
+    player.x = placement!.x;
+    player.y = placement!.y;
+    player.peekExposure = placement!.exposure;
+    updateActiveEncounter(run, map, "player");
+    expect(saveRun(run)).toBe(true);
+
+    const loaded = loadRunWithReport();
+    expect(loaded.error).toBeNull();
+    expect(loaded.run!.activeEncounter!.map.units.find((unit) => unit.id === player.id)!.peekExposure)
+      .toEqual(placement!.exposure);
+  });
+
+  it("rejects a cardinal adjacent tile as a committed peek exposure", () => {
+    const run = encounter("ILLEGAL-PEEK-SNAPSHOT");
+    const raw = serialized(run);
+    const player = raw.activeEncounter.map.units.find(
+      (unit: { team: string }) => unit.team === "player",
+    );
+    const occupied = new Set(
+      raw.activeEncounter.map.units
+        .filter((unit: { hp: number; id: string }) => unit.hp > 0 && unit.id !== player.id)
+        .map((unit: { x: number; y: number }) => `${unit.x},${unit.y}`),
+    );
+    const cardinal = [
+      { x: player.x + 1, y: player.y },
+      { x: player.x - 1, y: player.y },
+      { x: player.x, y: player.y + 1 },
+      { x: player.x, y: player.y - 1 },
+    ].find((point) =>
+      point.x >= 0 && point.y >= 0 &&
+      point.x < raw.activeEncounter.map.width && point.y < raw.activeEncounter.map.height &&
+      raw.activeEncounter.map.tiles[point.y * raw.activeEncounter.map.width + point.x] === "floor" &&
+      !occupied.has(`${point.x},${point.y}`)
+    );
+    expect(cardinal).toBeDefined();
+    player.peekExposure = cardinal;
     store(raw);
 
     expect(loadRunWithReport().run).toBeNull();

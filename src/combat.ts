@@ -376,7 +376,7 @@ function isPeekTileShootable(
   return true;
 }
 
-function validCommittedExposure(
+export function validCommittedExposure(
   map: GameMap,
   target: Unit,
 ): { x: number; y: number } | null {
