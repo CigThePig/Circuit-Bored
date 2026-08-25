@@ -16,6 +16,7 @@ import {
 import { beginUnitTurn } from "../src/rules.ts";
 import { isHunkered } from "../src/status.ts";
 import { createAiSession } from "../src/aiSession.ts";
+import { makeArchetypeUnit } from "../src/content.ts";
 import { buildMap } from "./fixtures.ts";
 
 function runEnemyTurn(map: ReturnType<typeof buildMap>, enemyIdx: number): AiAction[] {
@@ -345,6 +346,32 @@ describe("AI movement", () => {
 });
 
 describe("AI awareness of the new tactical rules", () => {
+  it("keeps the committed firing line used by suppression after the target loses exposure", () => {
+    const map = buildMap([
+      ".....",
+      "..#..",
+      ".....",
+    ]);
+    const player = makeArchetypeUnit("operator", "rook", 1, 1);
+    const enemy = makeArchetypeUnit("sentinel", "sentinel", 4, 2);
+    player.peekExposure = { x: 2, y: 2 };
+    player.overwatch = true;
+    map.units.push(player, enemy);
+    const before = previewShot(map, enemy, player);
+    expect(before.shot).toMatchObject({ canShoot: true, targetExposure: true });
+    const session = createAiSession();
+
+    beginEnemyTurn(map, enemy, session);
+    const action = takeEnemyAction(map, enemy, session, () => 0.5);
+
+    expect(action.kind).toBe("suppress");
+    if (action.kind === "suppress") {
+      expect(action.shot).toEqual(before);
+    }
+    expect(player.peekExposure).toBeNull();
+    expect(previewShot(map, enemy, player).shot.canShoot).toBe(false);
+  });
+
   it("fires on the operator whose cover it has already gone around", () => {
     // Both operators are visible and both stand against cover. Only the
     // western one's cover fails to face the shooter, and that is the one worth

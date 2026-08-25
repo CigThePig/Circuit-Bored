@@ -91,6 +91,11 @@ export function encounterOutcome(map: GameMap): EncounterOutcome | null {
   return null;
 }
 
+/** Only an ordinary shot owns the hit/damage prediction drawn over a target. */
+export function shouldShowShotPrediction(action: ActionId): boolean {
+  return action === "shoot";
+}
+
 export function startRuntime(
   canvas: HTMLCanvasElement,
   hud: HTMLElement,
@@ -463,7 +468,7 @@ export function startRuntime(
       });
       // Only a shot has a hit chance worth previewing; a support ability does
       // not, and showing one would be a number the player cannot act on.
-      if (armedAlly) continue;
+      if (!shouldShowShotPrediction(previewAction)) continue;
       const preview = cachedPreview(selected, u);
       state.enemyPreviews.push({
         x: u.x,
@@ -1113,7 +1118,7 @@ export function startRuntime(
           const effect = addSuppressionEffect(
             enemy,
             action.target,
-            previewShot(map, enemy, action.target),
+            action.shot,
           );
           addFloating("SUPPRESSED", action.target.x, action.target.y, "#ff9a4d");
           redraw();
